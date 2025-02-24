@@ -5,34 +5,50 @@ import yfinance as yf
 import pandas_market_calendars as mcal
 from datetime import datetime, timedelta, date
 import matplotlib.pyplot as plt
+import mplfinance as mpf
+import time
+from tqdm import tqdm
+
 
 class MarketUtilities():
-    def __init__(self, wrds_username):
-        self.wrds_db = wrds.Connection(wrds_username='audreymcmillion')
-        self.sqlite_conn = sqlite3.connect('databases/halt_data.db')
+    def __init__(self, wrds_username, wrds_db = None, sqlite_conn = None):
+        if wrds_db is not None:
+            self.wrds_db = wrds_db
+        else:
+            self.wrds_db = wrds.Connection(wrds_username=wrds_username)
+        
+        if sqlite_conn is not None:
+            self.sqlite_conn = sqlite_conn
+        else:
+            self.sqlite_conn = sqlite3.connect('databases/halt_data.db') 
+            
         self.nyse = mcal.get_calendar("NYSE")
 
         with open("sql_lib/daily_price_details.sql", "r") as file:
             self.price_details_query = file.read()
 
+        with open("sql_lib/intraday_data.sql", "r") as file:
+            self.intraday_data_query = file.read()
+
     # function to get industry details from yahoo finance API
     def get_industry_data(self, symbols: list) -> pd.DataFrame:
         industries_dict = {
             "symbol": [],
-            "industry_key": [],
-            "sector_key": []
+            "industry": [],
+            "sector": []
         }
         
-        for symbol in symbols:
+        for symbol in tqdm(symbols):
+            time.sleep(0.25)
             industries_dict["symbol"].append(symbol)
-            ticker_info = yf.Ticker(symbol).info  # Fetch data once
-
+    
             try:
-                industries_dict["industry_key"].append(ticker_info.get("industryKey"))
-                industries_dict["sector_key"].append(ticker_info.get("sectorKey"))
+                ticker_info = yf.Ticker(symbol).info  # Fetch data once
+                industries_dict["industry"].append(ticker_info.get("industry"))
+                industries_dict["sector"].append(ticker_info.get("sector"))
             except:
-                industries_dict["industry_key"].append(None)
-                industries_dict["sector_key"].append(None)
+                industries_dict["industry"].append(None)
+                industries_dict["sector"].append(None)
 
         return pd.DataFrame.from_dict(industries_dict)
 
@@ -58,7 +74,14 @@ class MarketUtilities():
 
         return trade_date_days_after.strftime('%Y-%m-%d')
     
-    # funnction to get the daily price details for a given symbol from WRDS
+    # function to get the intraday trade details for a given symbol from WRDS
+    def intraday_df_w_dates(self, symbol, current_dt, before_dt, after_dt):
+        return self.wrds_db.raw_sql(self.price_details_query.format(start_dt = before_dt,
+                            current_dt = current_dt,
+                            end_dt = after_dt,
+                            symbol_lst = ("'" + symbol + "'"))).sort_values("dlycaldt").reset_index(drop=True)
+        
+    # function to get the daily price details for a given symbol from WRDS
     def multiday_df(self, symbol, current_dt, diff_num):
         return self.wrds_db.raw_sql(self.price_details_query.format(start_dt = self.get_before_date(current_dt, diff_num),
                             current_dt = current_dt,
@@ -92,4 +115,28 @@ class MarketUtilities():
         ax[0].legend()
         ax[1].legend()
         plt.tight_layout()
+        plt.show()
+
+    # function to plot a multi-day candlestick chart for a given symbol
+    def multiday_candlestick(self, symbol, current_dt, diff_num=15):
+        pd_result = self.multiday_df(symbol, current_dt, diff_num)
+        pd_result = pd_result.rename(columns={"dlycaldt": "Date", 
+                                              "dlyopen": "Open", 
+                                              "dlyhigh": "High", 
+                                              "dlylow": "Low", 
+                                              "dlyclose": "Close", 
+                                              "dlyvol": "Volume"})
+        pd_result['Date'] = pd.to_datetime(pd_result['Date'])
+
+        # plot
+        mpf.plot(pd_result.set_index("Date"), 
+                 type='candle', 
+                 style='yahoo', 
+                 volume=True, 
+                 ylabel='Price', 
+                 ylabel_lower='Volume', 
+                 title='Candlestick Chart', 
+                 figratio=(10,5), 
+                 figscale=1)
+        
         plt.show()

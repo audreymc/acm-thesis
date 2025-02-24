@@ -7,36 +7,80 @@ from pyextremes import get_extremes
 from pyextremes.plotting import plot_extremes
 import wrds
 from pyextremes import EVA
+from pyextremes.tests import KolmogorovSmirnov
 import sqlite3
+from scipy import stats
+from market_utils import MarketUtilities
 
 class ExtremeValueScoring:
     def __init__(self, wrds_username):
-        self.wrds_db = wrds.Connection(wrds_username='audreymcmillion')
+        self.wrds_db = wrds.Connection(wrds_username=wrds_username)
         self.sqlite_conn = sqlite3.connect('databases/halt_data.db')
+        self.mkt_utils = MarketUtilities(wrds_username=wrds_username, wrds_db=self.wrds_db, sqlite_conn=self.sqlite_conn)
 
-        with open("sql_lib/daily_trades.sql", "r") as file:
-            self.dly_trades_template = file.read()
+        with open("sql_lib/daily_trades_wquotes.sql", "r") as file:
+            self.intra_dly_trades_template = file.read()
+
+        with open("sql_lib/sqlite_intraday_trades.sql", "r") as file:
+            self.sqlite_intraday_tr_template = file.read()
 
     # function to get daily trades data from WRDS
-    def get_daily_trades(self, current_dt, before_dt, after_dt, symbol):
-        # get daily trades
-        if int(before_dt[:4]) == int(after_dt[:4]):
-            dly_trades = self.wrds_db.raw_sql(self.dly_trades_template.format(symbol=symbol, yr=current_dt[:4], start_dt=before_dt, end_dt=after_dt))
-        else: 
-            dly_trades_before = self.wrds_db.raw_sql(self.dly_trades_template.format(symbol=symbol, yr=before_dt[:4], start_dt=before_dt, end_dt=str(int(before_dt[:4])) + "-12-31"))
-            dly_trades_after = self.wrds_db.raw_sql(self.dly_trades_template.format(symbol=symbol, yr=after_dt[:4], start_dt=str(int(after_dt[:4])) + "-01-01", end_dt=after_dt))
-            dly_trades = pd.concat([dly_trades_before, dly_trades_after])
+    def get_daily_trades(self, current_dt, before_dt, after_dt, symbol, use_sqlite=True, write_sqlite=True):
+        sqlite_df_used = False
+        if use_sqlite:
+            # check if data exists in SQLite database
+            existing_data = pd.read_sql(self.sqlite_intraday_tr_template.format(symbol=symbol, 
+                                                                                before_dt=before_dt, 
+                                                                                after_dt=after_dt), self.sqlite_conn)
+        else:
+            existing_data = pd.DataFrame()
 
-        if dly_trades.empty:
-            return pd.DataFrame()
+        # if ex data exists, return it
+        if not existing_data.empty:
+            # Data exists in SQLite database
+            dly_trades = existing_data
+            sqlite_df_used = True
+        else:
+            # get daily trades
+            if int(before_dt[:4]) == int(after_dt[:4]):
+                dly_trades = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=current_dt[:4], start_dt=before_dt, end_dt=after_dt))
+            else: 
+                dly_trades_before = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=before_dt[:4], start_dt=before_dt, end_dt=str(int(before_dt[:4])) + "-12-31"))
+                dly_trades_after = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=after_dt[:4], start_dt=str(int(after_dt[:4])) + "-01-01", end_dt=after_dt))
+                dly_trades = pd.concat([dly_trades_before, dly_trades_after])
+
+            if dly_trades.empty:
+                return pd.DataFrame()
+            
+            if write_sqlite:
+                # write the results to the SQLite database
+                dly_trades.to_sql('intraday_symbol_details', self.sqlite_conn, if_exists='append', index=False)
 
         # process price extremes
-        dly_trades['trunc_time'] = (pd.to_datetime('00:00:00') + dly_trades['trunc_time']).dt.time
+        if not sqlite_df_used: # if we used the SQLite database, we don't need to process the below timestamp
+            dly_trades['trunc_time'] = (pd.to_datetime('00:00:00') + dly_trades['trunc_time']).dt.time
         dly_trades['datetime'] = pd.to_datetime(dly_trades['date'].astype(str) + ' ' + dly_trades['trunc_time'].astype(str))
         dly_trades = dly_trades.set_index('datetime')
 
         # return daily trades dataframe
         return dly_trades
+    
+    # function to test the fit of an extreme value distribution to the data
+    def test_fit(self, model, significance_level = 0.05):
+        if model is None:
+            return {'model': None, 'p-value': np.nan, 'test_statistic': np.nan, 'critical_value': np.nan}
+        
+        kstest = KolmogorovSmirnov(
+            extremes=model.extremes,
+            distribution=model.distribution.name,
+            fit_parameters=model.distribution.mle_parameters,
+            significance_level=significance_level,
+        )
+        
+        return {'model': model.distribution.name,
+                'p-value': kstest.pvalue, 
+                'test_statistic': kstest.test_statistic, 
+                'critical_value': stats.kstwo.ppf(1 - 0.05 , len(model.extremes))}
 
     # function to get extreme value scores for a given dataframe row
     def get_ev_score(self, row):
@@ -48,47 +92,199 @@ class ExtremeValueScoring:
         # get symbol
         symbol = row["ticker"]
 
+        # print(symbol, current_dt, before_dt, after_dt)
+
         # get daily trades dataframe
         daily_trades = self.get_daily_trades(current_dt, before_dt, after_dt, symbol)
 
         # check if empty
         if daily_trades.empty:
-            return pd.Series({"high_extreme": np.nan, "low_extreme": np.nan, "high_score": np.nan, "low_score": np.nan})
+            return pd.Series({
+                    "high_extreme": np.nan,
+                    "high_score": np.nan,
+                    "high_pvalue": np.nan,
+                    "high_test_statistic": np.nan,
+                    "high_critical_value": np.nan,
+                    "high_model": None,
+                    "low_extreme": np.nan,
+                    "low_score": np.nan,
+                    "low_pvalue": np.nan,
+                    "low_test_statistic": np.nan,
+                    "low_critical_value": np.nan,
+                    "low_model": None,
+                    "block_size": None
+                })
 
         # get high/low extreme values on dates
         current_dt_dt = pd.to_datetime(current_dt).date()
         high_extreme = daily_trades[daily_trades.date == current_dt_dt].avg_price_diff.max()
         low_extreme = daily_trades[daily_trades.date == current_dt_dt].avg_price_diff.min()
 
+        # choose a block size based on the number of trades in a given day
+        # 390 = # of minutes in 6.5 hours (a trading day) -> 1 trade per minute on average
+        if row["avg_dlynumtrd"] < 390:
+            block_size = "1D"
+        else:
+            block_size = "1H"
+
         # fit high extreme value model
         high_model = EVA(daily_trades.dropna().avg_price_diff)
         try:
-            high_model.get_extremes(method="BM", block_size="1H", errors="ignore", extremes_type="high")
-        except:
-            return pd.Series({"high_extreme": np.nan, "low_extreme": np.nan, "high_score": np.nan, "low_score": np.nan})
-        try:
+            high_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
             high_model.fit_model()
             high_score = 1 - high_model.model.cdf(high_extreme)
+            high_fit = self.test_fit(high_model)
         except:
             high_score = np.nan
+            high_fit = self.test_fit(None)
 
-        # fit low extreme value model
+        # fit low extreme value model -> we fit to the negative of the data to get the low extreme since 
+        # the low extreme implementation in pyextremes is finnicky
         low_model = EVA((-1)*daily_trades.dropna().avg_price_diff)
         try:
-            low_model.get_extremes(method="BM", block_size="1H", errors="ignore", extremes_type="high")
-        except:
-            return pd.Series({"high_extreme": np.nan, "low_extreme": np.nan, "high_score": np.nan, "low_score": np.nan})
-        try:
+            low_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
             low_model.fit_model()
             low_score = 1 - low_model.model.cdf(np.abs(low_extreme))
+            low_fit = self.test_fit(low_model)
         except:
             low_score = np.nan
+            low_fit = self.test_fit(None)
+       
+        # return high/low scores
+        return pd.Series({
+                "high_extreme": high_extreme,
+                "high_score": high_score,
+                "high_pvalue": high_fit['p-value'],
+                "high_test_statistic": high_fit['test_statistic'],
+                "high_critical_value": high_fit['critical_value'],
+                "high_model": high_fit['model'],
+                "low_extreme": low_extreme,
+                "low_score": low_score,
+                "low_pvalue": low_fit['p-value'],
+                "low_test_statistic": low_fit['test_statistic'],
+                "low_critical_value": low_fit['critical_value'],
+                "low_model": low_fit['model'],
+                "block_size": block_size
+            })
+    
+    # function to get interday extreme value scores for a given dataframe row
+    def get_interday_ev_score(self, row):
+        # get date and time values
+        current_dt = row["current_date"]
+        before_dt = row["before_date"]
+        after_dt = row["after_date"]
+
+        # get symbol
+        symbol = row["ticker"]
+
+        # print(symbol, current_dt, before_dt, after_dt)
+
+        # get daily trades dataframe
+        interday_df = self.mkt_utils.intraday_df_w_dates(symbol, 
+                                                         current_dt=current_dt, 
+                                                         before_dt=before_dt, 
+                                                         after_dt=after_dt)
+        
+        # set index to datetime
+        interday_df['dlytime'] = '00:00:00'
+        interday_df['datetime'] = pd.to_datetime(interday_df['dlycaldt'].astype(str) + ' ' + interday_df['dlytime'].astype(str))
+        interday_df = interday_df.set_index('datetime')
+
+        # check if empty
+        if interday_df.empty:
+            return pd.Series({
+                    "high_extreme": np.nan,
+                    "high_score": np.nan,
+                    "high_pvalue": np.nan,
+                    "high_test_statistic": np.nan,
+                    "high_critical_value": np.nan,
+                    "high_model": None,
+                    "low_extreme": np.nan,
+                    "low_score": np.nan,
+                    "low_pvalue": np.nan,
+                    "low_test_statistic": np.nan,
+                    "low_critical_value": np.nan,
+                    "low_model": None,
+                    "vol_extreme": np.nan,
+                    "vol_score": np.nan,
+                    "vol_pvalue": np.nan,
+                    "vol_test_statistic": np.nan,
+                    "vol_critical_value": np.nan,
+                    "vol_model": None,
+                })
+
+        # get high/low extreme values on dates
+        current_dt_dt = pd.to_datetime(current_dt).date()
+        high_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyhigh"].iloc[0]
+        low_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlylow"].iloc[0]
+        vol_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyvol"].iloc[0]
+
+        # automatic one day block size
+        block_size = "1D"
+
+        # fit high extreme value model
+        high_model = EVA(interday_df.dropna().dlyhigh)
+        try:
+            high_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
+            high_model.fit_model()
+            high_score = 1 - high_model.model.cdf(high_extreme)
+            high_fit = self.test_fit(high_model)
+        except:
+            high_score = np.nan
+            high_fit = self.test_fit(None)
+
+        # fit low extreme value model
+        low_model = EVA(interday_df.dropna().dlylow)
+        try:
+            low_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="low")
+            low_model.fit_model()
+            low_score = 1 - low_model.model.cdf(np.abs(low_extreme))
+            low_fit = self.test_fit(low_model)
+        except:
+            low_score = np.nan
+            low_fit = self.test_fit(None)
+
+        # fit volume extreme value model
+        vol_model = EVA(interday_df.dropna().dlyvol)
+        try:
+            vol_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
+            vol_model.fit_model()
+            vol_score = 1 - vol_model.model.cdf(vol_extreme)
+            vol_fit = self.test_fit(vol_model)
+        except:  
+            vol_score = np.nan
+            vol_fit = self.test_fit(None)
 
         # return high/low scores
-        return pd.Series({"high_extreme": high_extreme, "low_extreme": low_extreme, "high_score": high_score, "low_score": low_score})
+        return pd.Series({
+                "high_extreme": high_extreme,
+                "high_score": high_score,
+                "high_pvalue": high_fit['p-value'],
+                "high_test_statistic": high_fit['test_statistic'],
+                "high_critical_value": high_fit['critical_value'],
+                "high_model": high_fit['model'],
+                "low_extreme": low_extreme,
+                "low_score": low_score,
+                "low_pvalue": low_fit['p-value'],
+                "low_test_statistic": low_fit['test_statistic'],
+                "low_critical_value": low_fit['critical_value'],
+                "low_model": low_fit['model'],
+                "vol_extreme": vol_extreme,
+                "vol_score": vol_score,
+                "vol_pvalue": vol_fit['p-value'],
+                "vol_test_statistic": vol_fit['test_statistic'],
+                "vol_critical_value": vol_fit['critical_value'],
+                "vol_model": vol_fit['model']
+                })
+
 
     # function to process halt data for extreme value scoring
     def process_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
         results = before_after_df.apply(self.get_ev_score, axis=1)
+        return before_after_df.join(results)
+    
+    # function to process the INTERDAY halt data for exteme value scoring
+    def process_intraday_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
+        results = before_after_df.apply(self.get_interday_ev_score, axis=1)
         return before_after_df.join(results)
 
