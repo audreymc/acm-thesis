@@ -16,7 +16,8 @@ quote_count as (
 	       q.trunc_time, 
 	       count(*) as quote_count,
 	       max(CASE WHEN q.bid > 0 THEN q.bid END) AS max_bid,
-           min(CASE WHEN q.ask > 0 THEN q.ask END) AS min_ask
+              min(CASE WHEN q.ask > 0 THEN q.ask END) AS min_ask,
+              avg((CASE WHEN q.ask > 0 THEN q.ask END) - (CASE WHEN q.bid > 0 THEN q.bid END)) as quote_spread
 	from quotes_daily q
 	group by 1, 2, 3
 	order by 1, 3
@@ -31,7 +32,7 @@ rw_trades as (
     and c.sym_root = '{symbol}'
     and time_m >= '09:30:00'
     and time_m <= '16:00:00'
-    and tr_scond !~ '[OPQ654]'
+    and tr_scond !~ '[OPQ654Z]'
     and tr_corr = '00' -- non-corrected/cancelled trades
     and sym_suffix is null -- exclude warrants, rights, units, etc
 ),
@@ -46,7 +47,7 @@ aggregated_trades as (
            sum(r.size) as volume, 
            max(r.tr_seqnum) as tr_seqnum,
            avg(r.intertrade_time) as avg_intertrade_time,
-           count(*) as num_trades
+           count(distinct tr_seqnum) as num_trades
     from rw_trades r 
     group by r.date, r.sym_root, r.trunc_time
 )
@@ -57,7 +58,7 @@ select a.date,
        coalesce(q.quote_count, 0) as quote_count,
        coalesce(q.max_bid, 0) as max_bid,
        coalesce(q.min_ask, 0) as min_ask,
-       coalesce(q.min_ask, 0) - coalesce(q.max_bid, 0) as quote_spread,
+       q.quote_spread,
        coalesce(a.avg_price, 0) as avg_price,
        coalesce(a.max_price, 0) as max_price,
        coalesce(a.min_price, 0) as min_price,

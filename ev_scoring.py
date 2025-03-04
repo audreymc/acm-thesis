@@ -25,40 +25,16 @@ class ExtremeValueScoring:
             self.sqlite_intraday_tr_template = file.read()
 
     # function to get daily trades data from WRDS
-    def get_daily_trades(self, current_dt, before_dt, after_dt, symbol, use_sqlite=True, write_sqlite=True):
-        sqlite_df_used = False
-        if use_sqlite:
-            # check if data exists in SQLite database
-            existing_data = pd.read_sql(self.sqlite_intraday_tr_template.format(symbol=symbol, 
-                                                                                before_dt=before_dt, 
-                                                                                after_dt=after_dt), self.sqlite_conn)
-        else:
-            existing_data = pd.DataFrame()
-
-        # if ex data exists, return it
-        if not existing_data.empty:
-            # Data exists in SQLite database
-            dly_trades = existing_data
-            sqlite_df_used = True
-        else:
-            # get daily trades
-            if int(before_dt[:4]) == int(after_dt[:4]):
-                dly_trades = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=current_dt[:4], start_dt=before_dt, end_dt=after_dt))
-            else: 
-                dly_trades_before = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=before_dt[:4], start_dt=before_dt, end_dt=str(int(before_dt[:4])) + "-12-31"))
-                dly_trades_after = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=after_dt[:4], start_dt=str(int(after_dt[:4])) + "-01-01", end_dt=after_dt))
-                dly_trades = pd.concat([dly_trades_before, dly_trades_after])
-
-            if dly_trades.empty:
-                return pd.DataFrame()
-            
-            if write_sqlite:
-                # write the results to the SQLite database
-                dly_trades.to_sql('intraday_symbol_details', self.sqlite_conn, if_exists='append', index=False)
-
-        # process price extremes
-        if not sqlite_df_used: # if we used the SQLite database, we don't need to process the below timestamp
-            dly_trades['trunc_time'] = (pd.to_datetime('00:00:00') + dly_trades['trunc_time']).dt.time
+    def get_daily_trades(self, before_dt, after_dt, symbol, use_sqlite=True, write_sqlite=True):
+        dly_trades = self.mkt_utils.intraday_df_w_dates(symbol, 
+                                                        before_dt=before_dt, 
+                                                        after_dt=after_dt, 
+                                                        use_sqlite=use_sqlite, 
+                                                        write_sqlite=write_sqlite)
+        
+        if dly_trades.empty:
+            return dly_trades
+        
         dly_trades['datetime'] = pd.to_datetime(dly_trades['date'].astype(str) + ' ' + dly_trades['trunc_time'].astype(str))
         dly_trades = dly_trades.set_index('datetime')
 
@@ -95,7 +71,7 @@ class ExtremeValueScoring:
         # print(symbol, current_dt, before_dt, after_dt)
 
         # get daily trades dataframe
-        daily_trades = self.get_daily_trades(current_dt, before_dt, after_dt, symbol)
+        daily_trades = self.get_daily_trades(before_dt, after_dt, symbol)
 
         # check if empty
         if daily_trades.empty:

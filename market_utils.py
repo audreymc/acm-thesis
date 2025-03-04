@@ -30,6 +30,12 @@ class MarketUtilities():
         with open("sql_lib/intraday_data.sql", "r") as file:
             self.intraday_data_query = file.read()
 
+        with open("sql_lib/daily_trades_wquotes.sql", "r") as file:
+            self.intra_dly_trades_template = file.read()
+
+        with open("sql_lib/sqlite_intraday_trades.sql", "r") as file:
+            self.sqlite_intraday_tr_template = file.read()
+
     # function to get industry details from yahoo finance API
     def get_industry_data(self, symbols: list) -> pd.DataFrame:
         industries_dict = {
@@ -75,11 +81,54 @@ class MarketUtilities():
         return trade_date_days_after.strftime('%Y-%m-%d')
     
     # function to get the intraday trade details for a given symbol from WRDS
-    def intraday_df_w_dates(self, symbol, current_dt, before_dt, after_dt):
+    def interday_df_w_dates(self, symbol, before_dt, after_dt, current_dt = None):
+        if current_dt is None:
+            current_dt = before_dt
+
         return self.wrds_db.raw_sql(self.price_details_query.format(start_dt = before_dt,
                             current_dt = current_dt,
                             end_dt = after_dt,
                             symbol_lst = ("'" + symbol + "'"))).sort_values("dlycaldt").reset_index(drop=True)
+    
+     # function to get daily trades data from WRDS
+    def intraday_df_w_dates(self, symbol, before_dt, after_dt, use_sqlite=True, write_sqlite=True):
+        sqlite_df_used = False
+        sqlite_full = False
+        if use_sqlite:
+            # check if data exists in SQLite database
+            existing_data = pd.read_sql(self.sqlite_intraday_tr_template.format(symbol=symbol, 
+                                                                                before_dt=before_dt, 
+                                                                                after_dt=after_dt), self.sqlite_conn)
+        else:
+            existing_data = pd.DataFrame()
+
+        # if ex data exists, return it
+        if (not existing_data.empty) and ((existing_data['date'].min() == before_dt) and (existing_data['date'].max() == after_dt)):
+            # Data exists in SQLite database
+            dly_trades = existing_data
+            sqlite_df_used = True
+        else:
+            # get daily trades
+            if int(before_dt[:4]) == int(after_dt[:4]):
+                dly_trades = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=before_dt[:4], start_dt=before_dt, end_dt=after_dt))
+            else: 
+                dly_trades_before = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=before_dt[:4], start_dt=before_dt, end_dt=str(int(before_dt[:4])) + "-12-31"))
+                dly_trades_after = self.wrds_db.raw_sql(self.intra_dly_trades_template.format(symbol=symbol, yr=after_dt[:4], start_dt=str(int(after_dt[:4])) + "-01-01", end_dt=after_dt))
+                dly_trades = pd.concat([dly_trades_before, dly_trades_after])
+
+            if dly_trades.empty:
+                return pd.DataFrame()
+            
+            if write_sqlite:
+                # write the results to the SQLite database
+                dly_trades.to_sql('intraday_symbol_details', self.sqlite_conn, if_exists='append', index=False)
+
+        # process price extremes
+        if not sqlite_df_used: # if we used the SQLite database, we don't need to process the below timestamp
+            dly_trades['trunc_time'] = (pd.to_datetime('00:00:00') + dly_trades['trunc_time']).dt.time
+
+        # return daily trades dataframe
+        return dly_trades.sort_values(["date", "trunc_time"]).reset_index(drop=True)
         
     # function to get the daily price details for a given symbol from WRDS
     def multiday_df(self, symbol, current_dt, diff_num):
