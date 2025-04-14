@@ -30,7 +30,7 @@ class MarketUtilities():
         with open("sql_lib/intraday_data.sql", "r") as file:
             self.intraday_data_query = file.read()
 
-        with open("sql_lib/daily_trades_wquotes.sql", "r") as file:
+        with open("sql_lib/daily_trades.sql", "r") as file:
             self.intra_dly_trades_template = file.read()
 
         with open("sql_lib/sqlite_intraday_trades.sql", "r") as file:

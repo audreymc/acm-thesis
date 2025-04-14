@@ -28,13 +28,35 @@ class StockDashApp:
     def setup_layout(self):
         self.app.layout = html.Div([
             # Top bar inputs
+            # html.Div([
+            #     dcc.Input(id='symbol', type='text', value='SAVA', placeholder='Enter Symbol'),
+            #     dcc.DatePickerSingle(
+            #         id='date-picker',
+            #         date=pd.to_datetime("2022-01-01"),
+            #     ),
+            #     dcc.Input(id='days_bf_aft', type='number', min=1, max=30, step=1, value=15),
+            #     html.Button('Run', id='run-button', n_clicks=0)
+            # ], style={'display': 'flex', 'gap': '10px'}),
+
+            # Top bar inputs
             html.Div([
-                dcc.Input(id='symbol', type='text', value='SAVA', placeholder='Enter Symbol'),
-                dcc.DatePickerSingle(
-                    id='date-picker',
-                    date=pd.to_datetime("2022-01-01"),
-                ),
-                dcc.Input(id='days_bf_aft', type='number', min=1, max=30, step=1, value=15),
+                html.Div([
+                    html.Label("Symbol:  ", style={'margin-right': '10px', 'font-family': 'Arial, Calibri, sans-serif'}),
+                    dcc.Input(id='symbol', type='text', value='SAVA', placeholder='Enter Symbol',  style={'height': '40px', 'font-family': 'Arial, Calibri, sans-serif'})
+                ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'center', 'margin-right': '10px'}),
+                
+                html.Div([
+                    html.Label("Date:  ", style={'margin-right': '10px', 'font-family': 'Arial, Calibri, sans-serif'}),
+                    dcc.DatePickerSingle(
+                        id='date-picker',
+                        date=pd.to_datetime("2022-01-01")                    )
+                ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'center', 'margin-right': '10px'}),
+                
+                html.Div([
+                    html.Label("Days Before/After:  ", style={'margin-right': '10px', 'font-family': 'Arial, Calibri, sans-serif'}),
+                    dcc.Input(id='days_bf_aft', type='number', min=1, max=30, step=1, value=15, style={'height': '40px', 'font-family': 'Arial, Calibri, sans-serif'})
+                ], style={'display': 'flex', 'flex-direction': 'row', 'align-items': 'center', 'margin-right': '10px'}),
+                
                 html.Button('Run', id='run-button', n_clicks=0)
             ], style={'display': 'flex', 'gap': '10px'}),
             
@@ -45,17 +67,18 @@ class StockDashApp:
                     dcc.Graph(id='interday-chart', style={'height': '600px', 'margin-bottom': '10px'}),
                     # Interday volume bar chart
                     dcc.Graph(id='interday-volume-chart', style={'height': '300px', 'margin-top': '10px'})
-                ], style={'width': '70%'}),
+                ], style={'width': '80%'}),
                 
                 # Metrics panel
                 html.Div(id='metrics-panel', style={
-                    'width': '30%',
+                    'width': '20%',
                     'padding': '10px',
                     'border': '1px solid #ccc',
                     'border-radius': '5px',
                     'box-shadow': '0 4px 8px rgba(0, 0, 0, 0.1)',
                     'background-color': '#f9f9f9',
-                    'margin': '10px'
+                    'margin': '10px',
+                    'font-family': 'Arial, Calibri, sans-serif'
                 })
             ], style={'display': 'flex'}),
             
@@ -64,12 +87,16 @@ class StockDashApp:
                 # Intraday zoom chart
                 dcc.Graph(id='intraday-chart'),
                 # Intraday cumulative volume chart
-                dcc.Graph(id='intraday-cumulative-volume-chart')
-                ], style={'width': '70%'}),
+                dcc.Graph(id='intraday-cumulative-volume-chart'),
+                # Sequential returns chart
+                dcc.Graph(id='seq-percent-returns'),
+                # Rolling standard deviation chart
+                dcc.Graph(id='rolling-std')
+                ], style={'width': '80%'}),
 
                 # Metrics panel
                 html.Div(id='metrics-intraday-panel', style={
-                    'width': '30%',
+                    'width': '20%',
                     'padding': '10px',
                     'border': '1px solid #ccc',
                     'border-radius': '5px',
@@ -101,16 +128,29 @@ class StockDashApp:
                                     high=df['dlyhigh'],
                                     low=df['dlylow'],
                                     close=df['dlyclose'])])
+            # Add title to the figure
+            price_fig.update_layout(
+                title=f'{symbol} Interday Candlestick Chart'
+            )
             volume_fig = px.bar(df, x='dlycaldt', y='dlyvol', title=f'{symbol} Volume Over Time')
 
             metrics = html.Div([
-                html.P(f"Mean Daily High: {df['dlyhigh'].mean():.2f}"),
-                html.P(f"Mean Volume: {df['dlyvol'].mean()}")
+                html.H3("Daily Summary Statistics", style={'text-align': 'center'}),
+                html.P([
+                    html.Strong("Mean Daily High: "),
+                    f"{df['dlyhigh'].mean():.2f}"
+                ]),
+                html.P([
+                    html.Strong("Mean Volume: "),
+                    f"{df['dlyvol'].mean():.2f}"
+                ])
             ])
             return price_fig, volume_fig, metrics
 
         @self.app.callback(
-            [Output('intraday-chart', 'figure'), Output('intraday-cumulative-volume-chart', 'figure'), Output('metrics-intraday-panel', 'children')],
+            [Output('intraday-chart', 'figure'), Output('intraday-cumulative-volume-chart', 'figure'), 
+             Output('seq-percent-returns', 'figure'), Output('rolling-std', 'figure'),
+             Output('metrics-intraday-panel', 'children')],
             [Input('interday-chart', 'clickData'), Input('symbol', 'value')]
         )
         def update_intraday_charts(clickData, symbol):
@@ -121,9 +161,42 @@ class StockDashApp:
             clicked_date = pd.to_datetime(clicked_date).strftime('%Y-%m-%d')
             df = self.get_intraday_stock_data(symbol, clicked_date).sort_values("trunc_time")  # Load intraday data
             
-            price_fig = px.line(df, x='trunc_time', y='avg_price', title=f'Intraday {clicked_date}')
+            #price_fig = px.line(df, x='trunc_time', y='avg_price', title=f'Intraday {clicked_date}')
+            #df['cumulative_volume'] = df['volume'].cumsum()
+            #volume_fig = px.line(df, x='trunc_time', y='cumulative_volume', title=f'Cumulative Volume {clicked_date}')
+            df['trunc_time'] = pd.to_datetime(clicked_date + ' ' + df['trunc_time'].astype(str))
+
+            # Generate a full range of timestamps at 1-second intervals
+            full_time_range = pd.date_range(
+                start=df['trunc_time'].min(),
+                end=df['trunc_time'].max(),
+                freq='1S'
+            )
+
+            # Calculate cumulative volume
             df['cumulative_volume'] = df['volume'].cumsum()
+            
+            # Calculate sequential returns
+            df['returns'] = df['avg_price'].pct_change()
+
+            # Calculate the rolling standard deviation of the returns
+            df['rolling_std_returns'] = df['returns'].rolling(window=10).std()
+
+            # Reindex the DataFrame to include all timestamps and forward-fill missing values
+            df = df.set_index('trunc_time').reindex(full_time_range, method='ffill').reset_index()
+            df.rename(columns={'index': 'trunc_time'}, inplace=True)
+
+            # Create the price figure
+            price_fig = px.line(df, x='trunc_time', y='avg_price', title=f'Intraday {clicked_date}')
+
+            # Create the cumulative volume figure
             volume_fig = px.line(df, x='trunc_time', y='cumulative_volume', title=f'Cumulative Volume {clicked_date}')
+
+            # line plot for returns
+            seq_returns_fig = px.line(df, x='trunc_time', y='returns', title=f'Sequential Returns {clicked_date}')
+
+            # line plot for rolling standard deviation of returns
+            rolling_std_fig = px.line(df, x='trunc_time', y='rolling_std_returns', title=f'Rolling Standard Deviation of Returns {clicked_date}')
             
             metrics = html.Div([
                 html.P(f"Mean Price: {df['avg_price'].mean():.2f}"),
@@ -132,7 +205,7 @@ class StockDashApp:
                 html.P(f"Min Price: {df['avg_price'].min():.2f}")
             ])
             
-            return price_fig, volume_fig, metrics
+            return price_fig, volume_fig, seq_returns_fig, rolling_std_fig, metrics
 
     def run(self):
         self.app.run_server(debug=True)

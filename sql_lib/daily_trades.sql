@@ -1,12 +1,13 @@
 with rw_trades as (
     select *,
-           date_trunc('second', time_m) as trunc_time
+           date_trunc('second', time_m) as trunc_time,
+           (c.time_m - (lag(c.time_m) over (partition by c.date, c.sym_root, date_trunc('second', c.time_m) ORDER BY c.time_m))) AS intertrade_time
     from taqm_{yr}.ctm_{yr} c 
     where c.date between date('{start_dt}') and date('{end_dt}')
     and c.sym_root = '{symbol}'
     and time_m >= '09:30:00'
     and time_m <= '16:00:00'
-    and tr_scond !~ '[OPQ654]'
+    and tr_scond !~ '[OPQ654ZU]'
     and tr_corr = '00' -- non-corrected/cancelled trades
     and sym_suffix is null -- exclude warrants, rights, units, etc
 ),

@@ -25,7 +25,7 @@ class ExtremeValueScoring:
             self.sqlite_intraday_tr_template = file.read()
 
     # function to get daily trades data from WRDS
-    def get_daily_trades(self, before_dt, after_dt, symbol, use_sqlite=True, write_sqlite=True):
+    def get_daily_trades(self, before_dt, after_dt, symbol, use_sqlite=False, write_sqlite=False):
         dly_trades = self.mkt_utils.intraday_df_w_dates(symbol, 
                                                         before_dt=before_dt, 
                                                         after_dt=after_dt, 
@@ -59,7 +59,7 @@ class ExtremeValueScoring:
                 'critical_value': stats.kstwo.ppf(1 - 0.05 , len(model.extremes))}
 
     # function to get extreme value scores for a given dataframe row
-    def get_ev_score(self, row):
+    def get_intraday_ev_score(self, row):
         # get date and time values
         current_dt = row["current_date"]
         before_dt = row["before_date"]
@@ -156,8 +156,7 @@ class ExtremeValueScoring:
         # print(symbol, current_dt, before_dt, after_dt)
 
         # get daily trades dataframe
-        interday_df = self.mkt_utils.intraday_df_w_dates(symbol, 
-                                                         current_dt=current_dt, 
+        interday_df = self.mkt_utils.interday_df_w_dates(symbol, 
                                                          before_dt=before_dt, 
                                                          after_dt=after_dt)
         
@@ -166,8 +165,17 @@ class ExtremeValueScoring:
         interday_df['datetime'] = pd.to_datetime(interday_df['dlycaldt'].astype(str) + ' ' + interday_df['dlytime'].astype(str))
         interday_df = interday_df.set_index('datetime')
 
+        # get high low difference
+        interday_df['dlyhighlowdiff'] = interday_df['dlyhigh'] - interday_df['dlylow']
+
+        # get open close difference
+        interday_df['dlyopenclosediff'] = np.abs(interday_df['dlyclose'] - interday_df['dlyopen'])
+
+        # get high/low extreme values on dates
+        current_dt_dt = pd.to_datetime(current_dt).date()
+
         # check if empty
-        if interday_df.empty:
+        if interday_df.empty or (current_dt_dt not in interday_df.dlycaldt.values):
             return pd.Series({
                     "high_extreme": np.nan,
                     "high_score": np.nan,
@@ -181,6 +189,18 @@ class ExtremeValueScoring:
                     "low_test_statistic": np.nan,
                     "low_critical_value": np.nan,
                     "low_model": None,
+                    "highlow_extreme": np.nan,
+                    "highlow_score": np.nan,
+                    "highlow_pvalue": np.nan,
+                    "highlow_test_statistic": np.nan,
+                    "highlow_critical_value": np.nan,
+                    "highlow_model": None,
+                    "openclose_extreme": np.nan,
+                    "openclose_score": np.nan,
+                    "openclose_pvalue": np.nan,
+                    "openclose_test_statistic": np.nan,
+                    "openclose_critical_value": np.nan,
+                    "openclose_model": None,
                     "vol_extreme": np.nan,
                     "vol_score": np.nan,
                     "vol_pvalue": np.nan,
@@ -189,11 +209,13 @@ class ExtremeValueScoring:
                     "vol_model": None,
                 })
 
-        # get high/low extreme values on dates
+        # get relevant values on dates
         current_dt_dt = pd.to_datetime(current_dt).date()
         high_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyhigh"].iloc[0]
         low_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlylow"].iloc[0]
         vol_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyvol"].iloc[0]
+        open_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyopen"].iloc[0]
+        close_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyclose"].iloc[0]
 
         # automatic one day block size
         block_size = "1D"
@@ -220,6 +242,28 @@ class ExtremeValueScoring:
             low_score = np.nan
             low_fit = self.test_fit(None)
 
+        # fit high/low extreme value model
+        highlow_model = EVA(interday_df.dropna().dlyhighlowdiff)
+        try:
+            highlow_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
+            highlow_model.fit_model()
+            highlow_score = 1 - highlow_model.model.cdf(high_extreme - low_extreme)
+            highlow_fit = self.test_fit(highlow_model)
+        except:
+            highlow_score = np.nan
+            highlow_fit = self.test_fit(None)
+
+        # fit open/close extreme value model
+        openclose_model = EVA(interday_df.dropna().dlyopenclosediff)
+        try:
+            openclose_model.get_extremes(method="BM", block_size=block_size, errors="ignore", extremes_type="high")
+            openclose_model.fit_model()
+            openclose_score = 1 - openclose_model.model.cdf(np.abs(close_extreme - open_extreme))
+            openclose_fit = self.test_fit(openclose_model)
+        except:
+            openclose_score = np.nan
+            openclose_fit = self.test_fit(None)
+
         # fit volume extreme value model
         vol_model = EVA(interday_df.dropna().dlyvol)
         try:
@@ -245,6 +289,18 @@ class ExtremeValueScoring:
                 "low_test_statistic": low_fit['test_statistic'],
                 "low_critical_value": low_fit['critical_value'],
                 "low_model": low_fit['model'],
+                "highlow_extreme": high_extreme - low_extreme,
+                "highlow_score": highlow_score,
+                "highlow_pvalue": highlow_fit['p-value'],
+                "highlow_test_statistic": highlow_fit['test_statistic'],
+                "highlow_critical_value": highlow_fit['critical_value'],
+                "highlow_model": highlow_fit['model'],
+                "openclose_extreme": np.abs(close_extreme - open_extreme),
+                "openclose_score": openclose_score,
+                "openclose_pvalue": openclose_fit['p-value'],
+                "openclose_test_statistic": openclose_fit['test_statistic'],
+                "openclose_critical_value": openclose_fit['critical_value'],
+                "openclose_model": openclose_fit['model'],
                 "vol_extreme": vol_extreme,
                 "vol_score": vol_score,
                 "vol_pvalue": vol_fit['p-value'],
@@ -255,12 +311,12 @@ class ExtremeValueScoring:
 
 
     # function to process halt data for extreme value scoring
-    def process_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
-        results = before_after_df.apply(self.get_ev_score, axis=1)
+    def process_intraday_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
+        results = before_after_df.apply(self.get_intraday_ev_score, axis=1)
         return before_after_df.join(results)
     
     # function to process the INTERDAY halt data for exteme value scoring
-    def process_intraday_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
+    def process_interday_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
         results = before_after_df.apply(self.get_interday_ev_score, axis=1)
         return before_after_df.join(results)
 

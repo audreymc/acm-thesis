@@ -32,7 +32,7 @@ rw_trades as (
     and c.sym_root = '{symbol}'
     and time_m >= '09:30:00'
     and time_m <= '16:00:00'
-    and tr_scond !~ '[OPQ654Z]'
+    and tr_scond !~ '[OPQ654ZU]'
     and tr_corr = '00' -- non-corrected/cancelled trades
     and sym_suffix is null -- exclude warrants, rights, units, etc
 ),
