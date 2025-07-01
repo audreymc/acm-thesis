@@ -3,10 +3,11 @@ import sqlite3
 import pandas as pd
 import yfinance as yf
 import pandas_market_calendars as mcal
-from datetime import datetime, timedelta, date
+from datetime import timedelta, date
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import time
+import datetime
 from tqdm import tqdm
 
 
@@ -79,6 +80,38 @@ class MarketUtilities():
         trade_date_days_after = trading_days[days_after]
 
         return trade_date_days_after.strftime('%Y-%m-%d')
+    
+    # function to get the number of trading days between two dates
+    def get_number_of_trading_days(self, start_date, end_date):
+        # query unique trading days from CRSP daily stock file
+        query = f"""
+            select count(distinct date) as trading_days
+            from crsp.dsf
+            where date between '{start_date}' and '{end_date}'
+        """
+
+        # run the query
+        result = self.wrds_db.raw_sql(query)
+
+        # return the result
+        return result['trading_days'][0]
+    
+    # function to get the unique trading days between two dates
+    def get_trading_days(self, start_date, end_date) -> list:
+        # query unique trading days from CRSP daily stock file
+        query = f"""
+            select distinct date
+            from crsp.dsf
+            where date between '{start_date}' and '{end_date}'
+            order by date
+        """
+
+        # run the query
+        result = self.wrds_db.raw_sql(query)
+
+        # ensure 'date' column is datetime before formatting
+        result['date'] = pd.to_datetime(result['date'])
+        return result['date'].dt.strftime('%Y-%m-%d').tolist()
     
     # function to get the intraday trade details for a given symbol from WRDS
     def interday_df_w_dates(self, symbol, before_dt, after_dt, current_dt = None):
@@ -189,3 +222,12 @@ class MarketUtilities():
                  figscale=1)
         
         plt.show()
+
+    # Ensure start_date and end_date are datetime.date objects
+    def to_date(self, dt):
+        if isinstance(dt, str):
+            return datetime.datetime.strptime(dt, '%Y-%m-%d').date()
+        elif isinstance(dt, datetime.date):
+            return dt
+        else:
+            raise TypeError("Date must be a string in '%Y-%m-%d' format or a datetime.date object") 

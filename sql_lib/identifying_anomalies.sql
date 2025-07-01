@@ -1,3 +1,4 @@
+-- This query was used to filter for potential anomalies from EV output
 with extreme_spreads as (
 	select ticker,
 	       eir.current_date,
