@@ -153,8 +153,6 @@ class ExtremeValueScoring:
         # get symbol
         symbol = row["ticker"]
 
-        # print(symbol, current_dt, before_dt, after_dt)
-
         # get daily trades dataframe
         interday_df = self.mkt_utils.interday_df_w_dates(symbol, 
                                                          before_dt=before_dt, 
@@ -310,7 +308,7 @@ class ExtremeValueScoring:
                 })
 
 
-    # function to process halt data for extreme value scoring
+    # function to process INTRADAY halt data for extreme value scoring
     def process_intraday_data(self, before_after_df: pd.DataFrame) -> pd.DataFrame:
         results = before_after_df.apply(self.get_intraday_ev_score, axis=1)
         return before_after_df.join(results)

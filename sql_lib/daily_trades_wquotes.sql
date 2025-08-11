@@ -25,7 +25,7 @@ quote_count as (
 
 rw_trades as (
     select *,
-           date_trunc('second', time_m) as trunc_time,
+           date_trunc('second', time_m) as trunc_time, -- truncating by second
            (c.time_m - (lag(c.time_m) over (partition by c.date, c.sym_root, date_trunc('second', c.time_m) ORDER BY c.time_m))) AS intertrade_time
     from taqm_{yr}.ctm_{yr} c 
     where c.date between date('{start_dt}') and date('{end_dt}')

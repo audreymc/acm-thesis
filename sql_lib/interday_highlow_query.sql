@@ -15,10 +15,10 @@ SELECT *
               LAG(a.dlyhigh) OVER (ORDER BY a.dlycaldt) AS prevhigh,
               a.dlyclose - LAG(a.dlyclose) OVER (ORDER BY a.dlycaldt) AS dlyreturn,
               ln(a.dlyhigh) - LAG(ln(a.dlyhigh)) OVER (ORDER BY a.dlycaldt) AS dlyhighreturn,
-              (a.dlyhigh  - a.dlylow) AS highlow,
               (a.dlyhigh  - a.dlylow) - LAG( (a.dlyhigh  - a.dlylow)) OVER (ORDER BY a.dlycaldt) AS highlow_diff,
               ln(a.dlyhigh / a.dlylow) AS log_highlow,
-              (ln(a.dlyhigh / a.dlylow) - LAG(ln(a.dlyhigh / a.dlylow)) OVER (ORDER BY a.dlycaldt))*100 AS log_highlow_diff
+              (ln(a.dlyhigh / a.dlylow) - LAG(ln(a.dlyhigh / a.dlylow)) OVER (ORDER BY a.dlycaldt))*100 AS log_highlow_diff, -- NOTE: we scale this by 100
+              a.dlyhigh / a.dlylow AS hl_ratio
       FROM crsp.dsf_v2 a
       JOIN crsp.dsenames AS b
       ON a.permno = b.permno

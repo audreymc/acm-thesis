@@ -1,3 +1,4 @@
+-- NOTE: This is the anomaly identification query utilized to create the initial sample set
 with extreme_spreads as (
 	select ticker,
 	       eir.current_date,

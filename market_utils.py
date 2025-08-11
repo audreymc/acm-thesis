@@ -12,16 +12,22 @@ from tqdm import tqdm
 
 
 class MarketUtilities():
-    def __init__(self, wrds_username, wrds_db = None, sqlite_conn = None):
-        if wrds_db is not None:
+    def __init__(self, wrds_username, wrds_db = "auto", sqlite_conn = "auto"):
+        if wrds_db is not None and wrds_db != "auto":
             self.wrds_db = wrds_db
-        else:
+        elif wrds_db == "auto":
+            # Automatically connect to WRDS using the provided username
             self.wrds_db = wrds.Connection(wrds_username=wrds_username)
-        
-        if sqlite_conn is not None:
-            self.sqlite_conn = sqlite_conn
         else:
-            self.sqlite_conn = sqlite3.connect('databases/halt_data.db') 
+            self.wrds_db = None
+        
+        if sqlite_conn is not None and sqlite_conn != "auto":
+            self.sqlite_conn = sqlite_conn
+        elif sqlite_conn == "auto":
+            # Automatically connect to SQLite database
+            self.sqlite_conn = sqlite3.connect('databases/halt_data.db')
+        else:
+            self.sqlite_conn = None
             
         self.nyse = mcal.get_calendar("NYSE")
 
