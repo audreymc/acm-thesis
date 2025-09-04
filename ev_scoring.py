@@ -13,15 +13,15 @@ from scipy import stats
 from market_utils import MarketUtilities
 
 class ExtremeValueScoring:
-    def __init__(self, wrds_username):
+    def __init__(self, wrds_username, path_prefix="/Users/audreymcmillion/Documents/acm-thesis"):
         self.wrds_db = wrds.Connection(wrds_username=wrds_username)
-        self.sqlite_conn = sqlite3.connect('databases/halt_data.db')
+        self.sqlite_conn = sqlite3.connect(f'{path_prefix}/databases/halt_data.db')
         self.mkt_utils = MarketUtilities(wrds_username=wrds_username, wrds_db=self.wrds_db, sqlite_conn=self.sqlite_conn)
 
-        with open("sql_lib/daily_trades_wquotes.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/daily_trades_wquotes.sql", "r") as file:
             self.intra_dly_trades_template = file.read()
 
-        with open("sql_lib/sqlite_intraday_trades.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/sqlite_intraday_trades.sql", "r") as file:
             self.sqlite_intraday_tr_template = file.read()
 
     # function to get daily trades data from WRDS
@@ -144,7 +144,8 @@ class ExtremeValueScoring:
             })
     
     # function to get interday extreme value scores for a given dataframe row
-    def get_interday_ev_score(self, row):
+    # TODO: RERUN WITH 5D BLOCK SIZE
+    def get_interday_ev_score(self, row, *, block_size="5D"):
         # get date and time values
         current_dt = row["current_date"]
         before_dt = row["before_date"]
@@ -215,8 +216,8 @@ class ExtremeValueScoring:
         open_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyopen"].iloc[0]
         close_extreme = interday_df[interday_df.dlycaldt == current_dt_dt]["dlyclose"].iloc[0]
 
-        # automatic one day block size
-        block_size = "1D"
+        # USING BLOCK SIZE OF 5 DAYS
+        # NOTE: previously used 1D but that was too small for interday data
 
         # fit high extreme value model
         high_model = EVA(interday_df.dropna().dlyhigh)

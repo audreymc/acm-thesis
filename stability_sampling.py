@@ -16,7 +16,8 @@ class StabilitySampling:
         self.mkt_utils = mkt_utils
         self.ipo_dt = ipo_dt
         self.cutoff_dt = cutoff_dt
-        self.data = self.get_daily_data(self.ipo_dt, self.cutoff_dt) # get daily high/low data
+        if ipo_dt is not None and cutoff_dt is not None:
+            self.data = self.get_daily_data(self.ipo_dt, self.cutoff_dt) # get daily high/low data
 
     # function to get daily high/low data from Yahoo Finance
     def get_yf_daily_data(self, start_dt, end_dt):   
@@ -41,7 +42,7 @@ class StabilitySampling:
     # get daily high/low data for the symbol
     def get_daily_data(self, start_dt: str, end_dt: str) -> pd.DataFrame:
         if self.mkt_utils.wrds_db is not None:
-            with open("sql_lib/interday_highlow_query.sql", "r") as file:
+            with open("/Users/audreymcmillion/Documents/acm-thesis/sql_lib/interday_highlow_query.sql", "r") as file:
                 interday_hl_template = file.read()
 
             extract_data = self.mkt_utils.wrds_db.raw_sql(interday_hl_template.format(symbol=self.symbol, \
@@ -63,13 +64,16 @@ class StabilitySampling:
         # convert to date if needed
         start_dt = self.mkt_utils.to_date(start_dt)
         end_dt = self.mkt_utils.to_date(end_dt)
+
+        # convert datetime
+        self.data[date_col] = self.data[date_col].apply(self.mkt_utils.to_date)
         
         # get the series
         extract_srs = self.data[(self.data[date_col] >= start_dt) & 
                     (self.data[date_col] <= end_dt)].reset_index(drop=True)
         extract_srs[date_col] = pd.to_datetime(extract_srs[date_col])
         extract_srs = extract_srs.set_index(date_col)[hl_col]
-        return extract_srs
+        return extract_srs.astype(float)
     
     # function to reset the data for a new symbol or date range
     def reset_data(self, symbol: str, ipo_dt: str, cutoff_dt: str):
@@ -111,14 +115,14 @@ class StabilitySampling:
 
 
     # get stability metrics for the series
-    def get_stability_metrics(self, extract_srs):
+    def get_stability_metrics(self, extract_srs, window = 5):
         # metrics
-        rolling_std_30d = extract_srs.rolling(window=30).std()
-        rolling_mean_30d = extract_srs.rolling(window=30).mean()
+        rolling_std_x_d = extract_srs.rolling(window=window).std()
+        rolling_mean_x_d = extract_srs.rolling(window=window).mean()
         
         # get rolling summary statistics
-        min_30std, max_30std, median_30std = rolling_std_30d.min(), rolling_std_30d.max(), rolling_std_30d.median()
-        min_30mean, max_30mean, median_30mean = rolling_mean_30d.min(), rolling_mean_30d.max(), rolling_mean_30d.median()
+        min_x_std, max_x_std, median_x_std = rolling_std_x_d.min(), rolling_std_x_d.max(), rolling_std_x_d.median()
+        min_x_mean, max_x_mean, median_x_mean = rolling_mean_x_d.min(), rolling_mean_x_d.max(), rolling_mean_x_d.median()
         
         # get overall summary statistics
         overall_std = extract_srs.std()
@@ -136,12 +140,12 @@ class StabilitySampling:
             'min_date': extract_srs.index.min().strftime('%Y-%m-%d'),
             'max_date': extract_srs.index.max().strftime('%Y-%m-%d'),
             'n_days': len(extract_srs),
-            'min_30day_std': min_30std,
-            'max_30day_std': max_30std,
-            'median_30day_std': median_30std,
-            'min_30day_mean': min_30mean,
-            'max_30day_mean': max_30mean,
-            'median_30day_mean': median_30mean,
+            f'min_{str(window)}day_std': min_x_std,
+            f'max_{str(window)}day_std': max_x_std,
+            f'median_{str(window)}day_std': median_x_std,
+            f'min_{str(window)}day_mean': min_x_mean,
+            f'max_{str(window)}day_mean': max_x_mean,
+            f'median_{str(window)}day_mean': median_x_mean,
             'overall_std': overall_std,
             'overall_mean': overall_mean,
             'adf_pvalue': adf_pvalue,
@@ -167,7 +171,7 @@ class StabilitySampling:
                 'test_statistic': kstest.test_statistic, 
                 'critical_value': stats.kstwo.ppf(1 - 0.05 , len(model.extremes))}
     
-    def iterative_stability_sampling(self, significance_level=0.05, start_up = 200, chunk_size = 10) -> list:
+    def iterative_stability_sampling(self, significance_level=0.05, start_up = 200, chunk_size = 10, block_size = "5D") -> list:
         results = []
 
         # Iteratively sample chunks and fit EVA model
@@ -180,8 +184,8 @@ class StabilitySampling:
                 break
 
             # get the chunk start dates and end dates
-            chunk_start_dt = chunk_dates.iloc[0]
-            chunk_end_dt = chunk_dates.iloc[-1]
+            chunk_start_dt = self.mkt_utils.to_date(chunk_dates.iloc[0])
+            chunk_end_dt = self.mkt_utils.to_date(chunk_dates.iloc[-1])
 
             # extract the series
             chunk_srs = self.get_highlow_series(chunk_start_dt, chunk_end_dt)
@@ -189,7 +193,7 @@ class StabilitySampling:
 
             # fit the extreme value model
             chunk_ev_model = EVA(chunk_srs)
-            chunk_ev_model.get_extremes(method="BM", block_size=pd.Timedelta("30D"), errors="ignore")
+            chunk_ev_model.get_extremes(method="BM", block_size=pd.Timedelta(block_size), errors="ignore")
             chunk_ev_model.fit_model(distribution="genextreme")
 
             # get the metrics and parameters

@@ -8,11 +8,10 @@ import matplotlib.pyplot as plt
 import mplfinance as mpf
 import time
 import datetime
-from tqdm import tqdm
-
+from tqdm import tqdm 
 
 class MarketUtilities():
-    def __init__(self, wrds_username, wrds_db = "auto", sqlite_conn = "auto"):
+    def __init__(self, wrds_username, wrds_db = "auto", sqlite_conn = "auto", path_prefix="/Users/audreymcmillion/Documents/acm-thesis"):
         if wrds_db is not None and wrds_db != "auto":
             self.wrds_db = wrds_db
         elif wrds_db == "auto":
@@ -25,22 +24,22 @@ class MarketUtilities():
             self.sqlite_conn = sqlite_conn
         elif sqlite_conn == "auto":
             # Automatically connect to SQLite database
-            self.sqlite_conn = sqlite3.connect('databases/halt_data.db')
+            self.sqlite_conn = sqlite3.connect(f'{path_prefix}/databases/halt_data.db')
         else:
             self.sqlite_conn = None
             
         self.nyse = mcal.get_calendar("NYSE")
 
-        with open("sql_lib/daily_price_details.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/daily_price_details.sql", "r") as file:
             self.price_details_query = file.read()
 
-        with open("sql_lib/intraday_data.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/intraday_data.sql", "r") as file:
             self.intraday_data_query = file.read()
 
-        with open("sql_lib/daily_trades.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/daily_trades.sql", "r") as file:
             self.intra_dly_trades_template = file.read()
 
-        with open("sql_lib/sqlite_intraday_trades.sql", "r") as file:
+        with open(f"{path_prefix}/sql_lib/sqlite_intraday_trades.sql", "r") as file:
             self.sqlite_intraday_tr_template = file.read()
 
     # function to get industry details from yahoo finance API
