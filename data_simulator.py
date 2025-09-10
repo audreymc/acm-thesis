@@ -191,9 +191,10 @@ def generate_genextreme_distributions(c_min: float, c_max: float, loc_min: float
     return [dist1, dist2], rel_entropy
 
 class DataSimulator:
-    def __init__(self, reference_data: pd.DataFrame, init_value: float, fit_col='log_highlow_diff'):
+    def __init__(self, reference_data: pd.DataFrame, init_value: float, fit_col='log_highlow_diff', untransformed_col='hl_ratio'):
         self.reference_data = reference_data
         self.fit_col = fit_col
+        self.untransformed_col = untransformed_col
         self.init_value = init_value
         self.am = (reference_data, fit_col) # sets self._am via the setter method
         self.res = self.am                  # sets self._res via the setter method
@@ -254,13 +255,15 @@ class DataSimulator:
         return flags
 
     # function to get a valid simulated dataframe
-    def get_valid_simulated_dataframe(self, *, cutoff_val = 1.06, nob_num = 200, burn_num = 100, x_cutoff = 3, extreme_n = 5, verbose=False) -> pd.DataFrame:
+    def get_valid_simulated_dataframe(self, cutoff_val, *, nob_num = 200, burn_num = 100, x_cutoff = 3, extreme_n = 5, attempt_cutoff = 100, verbose=False) -> pd.DataFrame:
         i = 0 # attempt counter
         while True: # run until we get a valid simulated dataframe
             if verbose:
                 print("Attempt", i)
-            i += 1 
-            
+
+            if i > attempt_cutoff:
+                raise ValueError("Max attempts exceeded in get_valid_simulated_dataframe without finding a valid simulation.")
+        
             # simulate data using the parameters from the AR-GARCH model
             sim_data = self.am.simulate(
                 params=self.res.params, 
@@ -273,6 +276,8 @@ class DataSimulator:
             # get the transformed series
             hl_diff_srs = sim_data["data"]
             transf_srs = self.transform_hl_diff_series(hl_diff_srs)
+
+            i += 1
 
             # additionally, check that none of the generated values are LESS than 1, which is impossible given the nature of the series
             # check that only x_cutoff number of samples exceeds our maximum value
@@ -438,15 +443,24 @@ class DataSimulator:
         # otherwise, return no simulated data
         return None, reference_evs
 
-    def get_final_distribution_shifted_dataframe(self, ev_parameters: dict, *, sim_data: pd.DataFrame | None = None, alpha: float = 0.025, verbose: bool = False) -> pd.DataFrame:
+    def get_final_distribution_shifted_dataframe(self, ev_parameters: dict, *, sim_data: pd.DataFrame | None = None, alpha: float = 0.025, verbose: bool = False, max_attempts=10000) -> pd.DataFrame:
         if sim_data is None:
-            sim_data = self.get_valid_simulated_dataframe()
+            if verbose:
+                print("Generating initial valid simulated dataframe...")
+
+            sim_data = self.get_valid_simulated_dataframe(cutoff_val = self.reference_data[self.untransformed_col].max() + 0.1)
+
+            if verbose:
+                print("Initial valid simulated dataframe generated.")
 
         logical_cores = os.cpu_count()
         i = 0  # attempt counter
         while True:
             if verbose:
                 print("Attempt", i)
+
+            if i > max_attempts:
+                raise ValueError("Max attempts exceeded in get_final_distribution_shifted_dataframe without finding a valid simulation.")
 
             found = None
             with concurrent.futures.ThreadPoolExecutor() as executor:
