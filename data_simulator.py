@@ -14,6 +14,35 @@ from scipy.special import kl_div
 import matplotlib.pyplot as plt
 import concurrent.futures
 import os
+import hashlib
+from market_utils import MarketUtilities
+
+### DATABASE BUILDING AND QUERYING    
+def encode_strings_to_id(s1: str, s2: str, s3: str) -> int:
+    # concatenate strings
+    combined = f"{s1}|{s2}|{s3}"
+    
+    # Use SHA256 for stable hashing
+    digest = hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    
+    # convert hex digest to integer, then shrink to a reasonable size
+    numeric_id = int(digest, 16) % (10**12)  # keep 12-digit number
+    return numeric_id
+
+def get_reference_data(symbol, start_dt, end_dt, mkt_utils: MarketUtilities, *, 
+                       sql_path: str = "/Users/audreymcmillion/Documents/acm-thesis/sql_lib/interday_highlow_query.sql" ) -> Tuple[pd.DataFrame, float]:
+    with open(sql_path, "r") as file:
+        interday_hl_template = file.read()
+
+    # extract dataframe
+    df = mkt_utils.wrds_db.raw_sql(interday_hl_template.format(symbol=symbol, \
+                                                               start_dt=start_dt, \
+                                                               end_dt=end_dt))
+
+    # get the inital value
+    init_value = float(df["hl_ratio"].iloc[-1])
+    
+    return df, init_value
 
 ## PLOTTING FUNCTIONS
 def plot_extremes_compare(sim_data, x, y, y2, color_col, differenced = True):
@@ -255,7 +284,10 @@ class DataSimulator:
         return flags
 
     # function to get a valid simulated dataframe
-    def get_valid_simulated_dataframe(self, cutoff_val, *, nob_num = 200, burn_num = 100, x_cutoff = 3, extreme_n = 5, attempt_cutoff = 100, verbose=False) -> pd.DataFrame:
+    def get_valid_simulated_dataframe(self, *, cutoff_val: float | None = None, nob_num = 200, burn_num = 100, x_cutoff = 3, extreme_n = 5, attempt_cutoff = 100, verbose=False) -> pd.DataFrame:
+        if cutoff_val is None:
+            cutoff_val = self.reference_data[self.untransformed_col].max() + 0.1
+
         i = 0 # attempt counter
         while True: # run until we get a valid simulated dataframe
             if verbose:
@@ -381,6 +413,45 @@ class DataSimulator:
             row_i += 1
         if as_dataframe:
             sim_data['data_ext'] = sim_np[:,1]
+            return sim_data
+        else:
+            return pd.Series(sim_np[:,1])
+    
+    # function to generate a new series with an injected anomaly
+    def generate_anomaly_series(self, *, sim_data: pd.DataFrame | None = None, n_std: float = 5, cutoff_ind: int = 25, as_dataframe: bool = False, verbose=False) -> pd.Series | pd.DataFrame:
+        if sim_data is None:
+            sim_data = self.get_valid_simulated_dataframe()
+
+        # convert to numpy array for in-place updates
+        sim_np = sim_data[["t", "data", "volatility", "max_flag", "block"]].to_numpy()
+        n_length = sim_np.shape[0]
+
+        # get the maximum value and its index from the first 175 observations of the second column ("data") of sim_np
+        max_val = np.max(sim_np[cutoff_ind:(n_length-cutoff_ind) , 1])
+        max_idx = cutoff_ind + np.argmax(sim_np[cutoff_ind:(n_length-cutoff_ind), 1])
+
+        # get the corresponding conditional std
+        coresp_std = sim_np[max_idx, 2]
+
+        # new maximum value
+        new_max = max_val + n_std * coresp_std
+
+        if new_max <= np.max(sim_np[:, 1]):
+            raise ValueError("Injected anomaly is not greater than the overall series maximum.")
+        
+        # update the maximum value in-place
+        sim_np[max_idx, 1] = max_val + n_std * coresp_std # in-place update
+        if max_idx + 1 < n_length: # update the next value to adjust
+            sim_np[max_idx + 1, 1] = sim_np[max_idx + 1, 1] - n_std * coresp_std
+
+        if as_dataframe:
+            sim_data['data_ext'] = sim_np[:,1]
+
+            # create a max_flag_anomaly column to indicate the injected anomaly
+            sim_data['max_flag_anomaly'] = 0
+            sim_data.loc[max_idx, 'max_flag_anomaly'] = 1
+
+            # return the data
             return sim_data
         else:
             return pd.Series(sim_np[:,1])
