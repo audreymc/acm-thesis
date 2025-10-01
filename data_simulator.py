@@ -294,7 +294,7 @@ class DataSimulator:
                 print("Attempt", i)
 
             if i > attempt_cutoff:
-                raise ValueError("Max attempts exceeded in get_valid_simulated_dataframe without finding a valid simulation.")
+                raise ValueError("Max attempts exceeded in get_valid_simulated_dataframe without finding a valid simulated dataframe.")
         
             # simulate data using the parameters from the AR-GARCH model
             sim_data = self.am.simulate(
@@ -355,16 +355,16 @@ class DataSimulator:
         return valid_samples[0]
     
     # function to generate a new series with distributional shift in the extreme values
-    def generate_distribution_shift_series(self, reference_ev_orig: dict | None= None, reference_ev_new: dict = None, *, sim_data: pd.DataFrame | None = None, as_dataframe: bool = False, verbose=False) -> pd.Series | pd.DataFrame:
+    def generate_distribution_shift_series(self, reference_ev_orig: dict | None= None, reference_ev_new: dict = None, *, sim_data: pd.DataFrame | None = None, nob_num: int = 200, split_val: int = 100, as_dataframe: bool = False, verbose=False) -> pd.Series | pd.DataFrame:
         if sim_data is None:
-            sim_data = self.get_valid_simulated_dataframe()
+            sim_data = self.get_valid_simulated_dataframe(nob_num=nob_num)
 
         # convert to numpy array for in-place updates
         sim_np = sim_data[["t", "data", "volatility", "max_flag", "block"]].to_numpy()
     
         # IN-PLACE VERSION
         row_i = 0
-        max_orig = len(sim_data) / 2
+        max_orig = len(sim_data) - split_val - 1 # index of the last row in the original distribution section
         for row in sim_np:
             if verbose:
                 print("Iteration:", row_i, "/", sim_np.shape[0])
@@ -418,17 +418,23 @@ class DataSimulator:
             return pd.Series(sim_np[:,1])
     
     # function to generate a new series with an injected anomaly
-    def generate_anomaly_series(self, *, sim_data: pd.DataFrame | None = None, n_std: float = 5, cutoff_ind: int = 25, as_dataframe: bool = False, verbose=False) -> pd.Series | pd.DataFrame:
+    def generate_anomaly_series(self, *, sim_data: pd.DataFrame | None = None, n_std: float = 5, cutoff_ind_pre: int = 25, cutoff_ind_post: int = 25, nob_num: int = 200, as_dataframe: bool = False, verbose=False) -> pd.Series | pd.DataFrame:
         if sim_data is None:
-            sim_data = self.get_valid_simulated_dataframe()
+            try:
+                sim_data = self.get_valid_simulated_dataframe(nob_num=nob_num, attempt_cutoff=100, verbose=False)
+            except ValueError:
+                raise ValueError("Could not generate a valid simulated dataframe for anomaly injection.")
+        
+        if verbose:
+            print("Generated valid simulated dataframe.")
 
         # convert to numpy array for in-place updates
         sim_np = sim_data[["t", "data", "volatility", "max_flag", "block"]].to_numpy()
         n_length = sim_np.shape[0]
 
-        # get the maximum value and its index from the first 175 observations of the second column ("data") of sim_np
-        max_val = np.max(sim_np[cutoff_ind:(n_length-cutoff_ind) , 1])
-        max_idx = cutoff_ind + np.argmax(sim_np[cutoff_ind:(n_length-cutoff_ind), 1])
+        # get the maximum value and its index from the first n-cutoff_ind observations of the second column ("data") of sim_np
+        max_val = np.max(sim_np[cutoff_ind_pre:(n_length-cutoff_ind_post), 1])
+        max_idx = cutoff_ind_pre + np.argmax(sim_np[cutoff_ind_pre:(n_length-cutoff_ind_post), 1])
 
         # get the corresponding conditional std
         coresp_std = sim_np[max_idx, 2]
@@ -437,6 +443,10 @@ class DataSimulator:
         new_max = max_val + n_std * coresp_std
 
         if new_max <= np.max(sim_np[:, 1]):
+            if verbose:
+                print("Proposed injected anomaly is not greater than the overall series maximum.")
+                print("Current max value:", np.max(sim_np[:, 1]))
+                print("Proposed injected anomaly value:", new_max)
             raise ValueError("Injected anomaly is not greater than the overall series maximum.")
         
         # update the maximum value in-place
@@ -492,7 +502,7 @@ class DataSimulator:
         return bool(cond), bool(two_cond), pvals, two_pval
     
     # function to attempt multiple simulations in parallel until one is successful
-    def attempt_simulation(self, ev_parameters, alpha, sim_data = None):
+    def attempt_simulation(self, ev_parameters, alpha, sim_data = None, *, split_val: int = 100, robust = False) -> Tuple[pd.DataFrame | None, list]:
         reference_evs, _ = generate_genextreme_distributions(ev_parameters['c_min'], ev_parameters['c_max'], 
                                                              ev_parameters['loc_min'], ev_parameters['loc_max'], 
                                                              ev_parameters['scale_min'], ev_parameters['scale_max'])
@@ -500,26 +510,30 @@ class DataSimulator:
 
         # try and attempt the simulation
         try:
-            sim_data_local = self.generate_distribution_shift_series(reference_ev_orig, reference_ev_new, sim_data = sim_data, as_dataframe=True, verbose=False)
+            sim_data_local = self.generate_distribution_shift_series(reference_ev_orig, reference_ev_new, sim_data = sim_data, split_val=split_val, as_dataframe=True, verbose=False)
         except ValueError as e:
             return None, reference_evs
         
         # test that the injected values follow the desired distributions
-        cond, two_cond, _, _ = self.test_injected_values(sim_data_local, reference_ev_orig, reference_ev_new, alpha=alpha)
+        cond, two_cond, _, _ = self.test_injected_values(sim_data_local, reference_ev_orig, reference_ev_new, split_val=split_val, alpha=alpha)
 
         # if both conditions are met, return the simulated data and the reference extreme value distributions
-        if cond and two_cond:
-            return sim_data_local, reference_evs
+        if robust:
+            if cond and two_cond:
+                return sim_data_local, reference_evs
+        else: # just check that the two distributions are different
+            if two_cond:
+                return sim_data_local, reference_evs
         
         # otherwise, return no simulated data
         return None, reference_evs
 
-    def get_final_distribution_shifted_dataframe(self, ev_parameters: dict, *, sim_data: pd.DataFrame | None = None, alpha: float = 0.025, verbose: bool = False, max_attempts=10000) -> pd.DataFrame:
+    def get_final_distribution_shifted_dataframe(self, ev_parameters: dict, *, sim_data: pd.DataFrame | None = None, alpha: float = 0.025, verbose: bool = False, nob_num: int = 200, split_val: int = 100, max_attempts=10000) -> pd.DataFrame:
         if sim_data is None:
             if verbose:
                 print("Generating initial valid simulated dataframe...")
 
-            sim_data = self.get_valid_simulated_dataframe(cutoff_val = self.reference_data[self.untransformed_col].max() + 0.1)
+            sim_data = self.get_valid_simulated_dataframe(cutoff_val = self.reference_data[self.untransformed_col].max() + 0.1, nob_num = nob_num)
 
             if verbose:
                 print("Initial valid simulated dataframe generated.")
@@ -536,7 +550,7 @@ class DataSimulator:
             found = None
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = [
-                    executor.submit(self.attempt_simulation, ev_parameters, alpha, sim_data)
+                    executor.submit(self.attempt_simulation, ev_parameters, alpha, sim_data, split_val=split_val)
                     for _ in range(logical_cores)  # logical_cores parallel attempts
                 ]
 

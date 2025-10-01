@@ -1,13 +1,15 @@
-import random 
+import random
+from typing import Tuple 
 import numpy as np
 from arch import arch_model
 import pandas as pd
+from model_fitting import ModelFitting
 
 # NOTE: This code is translated from Gibbes & Candes paper with some help from a GPT model, which was manually
 # reviewed for correctness. The original paper is available at https://arxiv.org/abs/2306.05524.
-class DtACI:
+class DtACI(ModelFitting):
     def __init__(self, data):
-        self.data = data
+        super().__init__(data)
 
     def pinball(self, u, alpha):
         u = np.array(u)  # ensures u is a NumPy array
@@ -121,14 +123,14 @@ class DtACI:
     ### used to fit the model and make predictions at time t, startup specifies the first time we make a prediction set,
     ### badscores = FALSE means we use the conformity scores S_t := |V_t- \hat{\sigma}^2_t|/\hat{\sigma}^2_t else we use
     ### S_t := |V_t- \hat{\sigma}^2_t|
-    def argarch_conformal_forecasting_compute_scores(self, score_type, return_col = 'log_highlow_diff', lookback=300, ar=1, garch_p=1, garch_q=1, start_up = 100):
+    def argarch_conformal_forecasting_compute_scores(self, score_type, *, return_col = 'log_highlow_diff', lookback=300, ar=1, garch_p=1, garch_q=1, start_up = 100):
         # check if score_type is valid
         if score_type not in ["gamma", "residual_normalized", "absolute"]:
             raise ValueError("score_type must be one of 'gamma', 'residual_normalized', or 'absolute'")
         
         returns = self.data[return_col].values
         T = len(returns)
-        start_up = max(start_up, lookback) # where to start the precitions
+        start_up = max(start_up, lookback) # where to start the predictions
         scores = []
         mean_seq, variance_seq = [], []
         
@@ -162,7 +164,7 @@ class DtACI:
         
         return scores, mean_seq, variance_seq
     
-    def build_conformal_intervals(self, scores, mean_seq, variance_seq, alpha_seq, score_type, return_col = 'log_highlow_diff', lookback=300, burn_ind=100):
+    def build_conformal_intervals(self, scores, mean_seq, variance_seq, alpha_seq, score_type, *, return_col = 'log_highlow_diff', lookback=300, burn_ind=100):
         """
         Construct conformal prediction intervals using precomputed scores, means, variances, and adaptive alpha sequence.
 
@@ -263,7 +265,7 @@ class DtACI:
 
     ### Given a sequence of conformity scores compute the corresponding values for beta_t
     ### Epsilon gives numerical error tolerance in a binary search
-    def garch_conformal_forecasting_compute_betas(self, scores, lookback=np.Inf, epsilon=0.001):
+    def garch_conformal_forecasting_compute_betas(self, scores, lookback=np.inf, epsilon=0.001):
         """
         Computes the sequence of beta_t values for a given sequence of conformity scores.
         For each time t, beta_t is the lowest quantile such that the (1-beta_t) quantile
@@ -290,38 +292,23 @@ class DtACI:
         
         return beta_seq
     
-    # function to get coverage statistics from sumamry dataframe
-    def get_coverage_stats(self, forecast_df, level = 0.95):
-        # calculate coverage
-        coverage = forecast_df['within_CI'].mean() * 100
-
-        # calculate average, median, max, and min width of the confidence interval
-        forecast_df['width'] = forecast_df['upper_bound'] - forecast_df['lower_bound']
-        avg_width = forecast_df['width'].mean()
-        median_width = forecast_df['width'].median()
-        max_width = forecast_df['width'].max()
-        min_width = forecast_df['width'].min()
-
-        # calculate mean absolute error
-        mae = np.abs(forecast_df['actual'] - forecast_df['forecast']).mean()
-
-        # calculate RMSE
-        rmse = np.sqrt(np.mean((forecast_df['actual'] - forecast_df['forecast'])**2))
-
-        return {'coverage': coverage, 
-                'target_coverage': level * 100,
-                'avg_width': avg_width,
-                'median_width': median_width,
-                'max_width': max_width,
-                'min_width': min_width,
-                'mae': mae,
-                'rmse': rmse}
-    
-    def reset_data(self, data):
-        """
-        Reset the data used in the DtACI instance.
+    def get_dtaci_forecast_df(self, score_type: str, *, alpha = 0.05, lookback=300, start_up=100, burn_ind = 100) -> pd.DataFrame:
+        # keep these values consistent
+        gamma_grid= [0.001,0.002,0.004,0.008,0.0160,0.032,0.064,0.128]
+        Keps = 2.12
         
-        Parameters:
-        - data: new data to be set
-        """
-        self.data = data
+        # (1) Compute the scores, means, and variances
+        scores, means, variances = self.argarch_conformal_forecasting_compute_scores(score_type=score_type, lookback=300, start_up=start_up)
+
+        # (2) Compute the betas
+        betas = self.garch_conformal_forecasting_compute_betas(scores,lookback=lookback)
+
+        # (3) Run DtACI
+        stable_grid_gammas = self.argarch_conformal_adapt_stable(betas, alpha, gamma_grid, sigma=1/1000)
+        alpha_seq, err_seq_adapt, err_seq_fixed, gamma_seq, mean_alpha_seq, mean_error_seq, mean_gammas = stable_grid_gammas
+
+        # (4) Get the forecast dataframe
+        forecast_df = self.build_conformal_intervals(scores, means, variances, mean_alpha_seq, score_type = score_type, burn_ind=burn_ind)
+
+        # (5) Return summary dataframe
+        return forecast_df

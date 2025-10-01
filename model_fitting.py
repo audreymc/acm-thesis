@@ -9,14 +9,12 @@ from statsmodels.tsa.arima.model import ARIMA
 import logging
 logging.getLogger("cmdstanpy").setLevel(logging.CRITICAL)
 
-
-
 class ModelFitting:
     def __init__(self, data):
         self.data = data
     
     # fit and forecast AR(1)-GARCH(1,1) model using rolling window approach
-    def fit_forecast_ar1_garch11(self, window_size=300, alpha = 0.05, pred_col = "log_highlow_diff"):
+    def fit_forecast_ar_garch(self, *, window_size=300, alpha = 0.05, pred_col = "log_highlow_diff", ar_val = 1, garch_p = 1, garch_q = 1):
         # prepare to store results
         forecast_results = []
         actuals = []
@@ -27,7 +25,10 @@ class ModelFitting:
             train_data = self.data.iloc[start:end][pred_col]
             
             # fit AR(1)-GARCH(1,1) model
-            am = arch_model(train_data, mean='ARX', lags=1, vol='GARCH', p=1, q=1, dist='t')
+            if garch_p == 0:
+                am = arch_model(train_data, mean="ARX", lags=ar_val, vol="ARCH", p=garch_q, dist="t")
+            else:
+                am = arch_model(train_data, mean='ARX', lags=ar_val, vol='GARCH', p=garch_p, q=garch_q, dist='t')
             res = am.fit(disp='off')
 
             # forecast 1 step ahead
@@ -305,6 +306,9 @@ class ModelFitting:
     
     # function to get coverage statistics
     def get_coverage_stats(self, forecast_df, level = 0.95):
+        # ensure we don't modify the original DataFrame
+        forecast_df = forecast_df.copy()
+
         # calculate coverage
         coverage = forecast_df['within_CI'].mean() * 100
 
@@ -314,6 +318,33 @@ class ModelFitting:
         median_width = forecast_df['width'].median()
         max_width = forecast_df['width'].max()
         min_width = forecast_df['width'].min()
+
+        # calculate the MWI score
+        # calculate MWI score: sum of max(0, |actual - closest bound|)
+        
+        # (1) MWI Score
+        out_of_bounds = ~forecast_df['within_CI']
+        mwi_score = avg_width + (1/len(forecast_df)) * (2/(1-level)) * np.sum(
+            np.maximum(
+            0,
+            np.abs(forecast_df.loc[out_of_bounds, 'actual'] -
+                np.where(
+                np.abs(forecast_df.loc[out_of_bounds, 'actual'] - forecast_df.loc[out_of_bounds, 'lower_bound']) 
+                < np.abs(forecast_df.loc[out_of_bounds, 'actual'] - forecast_df.loc[out_of_bounds, 'upper_bound']),
+                forecast_df.loc[out_of_bounds, 'lower_bound'],
+                forecast_df.loc[out_of_bounds, 'upper_bound']
+                )
+            )
+            )
+        )
+
+        # (2) CWC score
+        nmpiw_score = avg_width / (forecast_df['actual'].max() - forecast_df['actual'].min())
+        mu = level
+        picp_score = (1/len(forecast_df)) * np.sum(forecast_df['within_CI'].astype(int))
+        gamma = 0 if picp_score >= mu else 1
+        eta = 1 # set eta to 1 for simplicity
+        cwc_score = nmpiw_score * (1 + (gamma * picp_score * np.exp(-eta * (picp_score - mu))))
 
         # calculate mean absolute error
         mae = np.abs(forecast_df['actual'] - forecast_df['forecast']).mean()
@@ -326,6 +357,8 @@ class ModelFitting:
                 'avg_width': avg_width,
                 'median_width': median_width,
                 'max_width': max_width,
+                'mwi_score': mwi_score,
+                'cwc_score': cwc_score,
                 'min_width': min_width,
                 'mae': mae,
                 'rmse': rmse}
