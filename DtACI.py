@@ -20,7 +20,7 @@ class DtACI(ModelFitting):
     ### Return value is a list containing the vectors alpha_t, err_t(alpha_t), err_t(alpha), 
     ### gamma_t, alphabar_t, err_t(alphabar_t), gammabar_t. Here we use the notation err_t(x)
     ### to refer to the errors computed using input x.
-    def argarch_conformal_adapt_stable(self, betas, alpha, gammas, sigma=1/1000, eta=2.72, eta_adapt=False, eta_lookback=500):
+    def argarch_conformal_adapt_stable(self, betas, alpha, gammas, *, eta_adapt = False, sigma = None, eta = None, I=100):
         """
         Adaptive conformal inference using expert weighting and online updates.
         
@@ -66,14 +66,19 @@ class DtACI(ModelFitting):
         # Randomly select current expert initially
         cur_expert = np.random.choice(k)
 
+        # initialize eta if adapting
+        if sigma is None:
+            sigma = 1/(2.0 * I)
+        
+        if eta is None:
+            eta = np.sqrt(3.0/I) * np.sqrt( (np.log(2*k*I) + 1) / ((1-alpha)**2 * alpha**2) )  # set an initial eta value
+
         for t in range(T):
-            # Adapt eta if required and enough history available
-            if t >= eta_lookback and eta_adapt:
-                loss_window = loss_seq[(t - eta_lookback):t]
+            # adapt eta if required and enough history available
+            if t >= I and eta_adapt:
+                loss_window = loss_seq[(t - I):t]
                 denom = np.sum(loss_window**2)
-                eta = np.sqrt((np.log(2*k*eta_lookback) + 1) / denom) if denom > 0 else np.inf
-            else:
-                eta = np.inf  # no adaptation or not enough data
+                eta = np.sqrt((np.log(2*k*I) + 1) / denom) if denom > 0 else np.inf
 
             alphat = expert_alphas[cur_expert]       # alpha from current expert
             alpha_seq[t] = alphat                    # store adaptive alpha
@@ -137,7 +142,11 @@ class DtACI(ModelFitting):
         for t in range(start_up, T):
 
             # fit the AR-GARCH model
-            argarch_model = arch_model(returns[(t - lookback):t], mean='ARX', lags=ar, vol='GARCH', p=garch_p, q=garch_q, dist='t')
+            # argarch_model = arch_model(returns[(t - lookback):t], mean='ARX', lags=ar, vol='GARCH', p=garch_p, q=garch_q, dist='t')
+            if garch_p == 0:
+                argarch_model = arch_model(returns[(t - lookback):t], mean="ARX", lags=ar, vol="ARCH", p=garch_q, dist="t")
+            else:
+                argarch_model = arch_model(returns[(t - lookback):t], mean='ARX', lags=ar, vol='GARCH', p=garch_p, q=garch_q, dist='t')
             argarch_fit = argarch_model.fit(disp="off")
 
             # forecast the next variance
@@ -292,19 +301,19 @@ class DtACI(ModelFitting):
         
         return beta_seq
     
-    def get_dtaci_forecast_df(self, score_type: str, *, alpha = 0.05, lookback=300, start_up=100, burn_ind = 100) -> pd.DataFrame:
+    def get_dtaci_forecast_df(self, score_type: str, *, alpha = 0.05, lookback=300, start_up=100, burn_ind = 100, ar=1, garch_p=1, garch_q=1, sigma = None, eta = None, I=100, eta_adapt=False) -> pd.DataFrame:
         # keep these values consistent
         gamma_grid= [0.001,0.002,0.004,0.008,0.0160,0.032,0.064,0.128]
         Keps = 2.12
         
         # (1) Compute the scores, means, and variances
-        scores, means, variances = self.argarch_conformal_forecasting_compute_scores(score_type=score_type, lookback=300, start_up=start_up)
+        scores, means, variances = self.argarch_conformal_forecasting_compute_scores(score_type=score_type, lookback=300, start_up=start_up, ar=ar, garch_p=garch_p, garch_q=garch_q)
 
         # (2) Compute the betas
         betas = self.garch_conformal_forecasting_compute_betas(scores,lookback=lookback)
 
         # (3) Run DtACI
-        stable_grid_gammas = self.argarch_conformal_adapt_stable(betas, alpha, gamma_grid, sigma=1/1000)
+        stable_grid_gammas = self.argarch_conformal_adapt_stable(betas, alpha, gamma_grid, sigma=sigma, eta=eta, eta_adapt=eta_adapt, I=I)
         alpha_seq, err_seq_adapt, err_seq_fixed, gamma_seq, mean_alpha_seq, mean_error_seq, mean_gammas = stable_grid_gammas
 
         # (4) Get the forecast dataframe

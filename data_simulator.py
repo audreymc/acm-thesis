@@ -305,6 +305,12 @@ class DataSimulator:
                 burn=burn_num # burn time of 100                    
             )
 
+            # check that the 25th, 50th, and 75th percentiles of 'volatility' are NOT within 0.01 of each other
+            vol_q = sim_data['volatility'].quantile([0.25, 0.5, 0.75]).values
+            if (np.abs(vol_q[0] - vol_q[1]) < 0.01) and (np.abs(vol_q[1] - vol_q[2]) < 0.01) and (np.abs(vol_q[0] - vol_q[2]) < 0.01):
+                i += 1
+                continue
+
             # get the transformed series
             hl_diff_srs = sim_data["data"]
             transf_srs = self.transform_hl_diff_series(hl_diff_srs)
@@ -450,7 +456,7 @@ class DataSimulator:
             raise ValueError("Injected anomaly is not greater than the overall series maximum.")
         
         # update the maximum value in-place
-        sim_np[max_idx, 1] = max_val + n_std * coresp_std # in-place update
+        sim_np[max_idx, 1] = new_max # in-place update
         if max_idx + 1 < n_length: # update the next value to adjust
             sim_np[max_idx + 1, 1] = sim_np[max_idx + 1, 1] - n_std * coresp_std
 
@@ -572,4 +578,75 @@ class DataSimulator:
         if verbose:
             print("Successful after", i, "testing attempts!")
 
+        return sim_data, reference_evs
+    
+    def get_distshift_anomaly_dataframe(self, *, ev_parameters: dict, sim_data: pd.DataFrame | None = None, 
+                                       alpha: float = 0.025, verbose: bool = False, nob_num: int = 200, 
+                                       split_val: int = 100, max_attempts: int = 10000, start_buffer: int = 0, end_buffer:int = 20, 
+                                       min_std: float = 5, max_std: float = 8) -> pd.DataFrame:
+        # first, get a valid simulated dataframe with distributional shift
+        sim_data, reference_evs = self.get_final_distribution_shifted_dataframe(ev_parameters=ev_parameters, sim_data=sim_data, alpha=alpha, 
+                                                                                verbose=verbose, nob_num=nob_num, split_val=split_val, max_attempts=max_attempts)
+
+        # now, inject an anomaly based on the second half's distribution
+        # get shapes, locs, and scales
+        shape_2, loc_2, scale_2 = reference_evs[1]['parameters']['c'], reference_evs[1]['parameters']['loc'], reference_evs[1]['parameters']['scale']
+
+        # get the second half's maximum value
+        second_half = sim_data[split_val+start_buffer:len(sim_data)-end_buffer][sim_data["max_flag"] == 1]['data_ext']
+        max_second_half = second_half.max()
+        max_second_half_idx = second_half.idxmax() 
+
+        # now generate a new maximum value that is greater than the 
+        # get the row at the index of the maximum in the second half
+        row = sim_data.loc[max_second_half_idx]
+        row_dict = row.to_dict()
+
+        if verbose:
+            print("Row dict for anomaly injection:", row_dict)
+
+        # generate some samples until we get one that is greater than the current maximum
+        dist_samp_size = 1000
+        data_2 = genextreme.rvs(shape_2, loc_2, scale_2, size=dist_samp_size)
+
+        # Define the lower and upper bounds for the anomaly
+        lower_bound = row_dict['data'] + min_std * row_dict['volatility']
+        upper_bound = row_dict['data'] + max_std * row_dict['volatility']
+
+        # Select the first value from data_2 that meets the criteria
+        anomaly_candidates = data_2[
+            (data_2 > max_second_half) &
+            (data_2 > sim_data['data_ext'].max()) &  # ensure it's greater than the overall max
+            (data_2 > lower_bound) &
+            (data_2 < upper_bound)
+        ]
+
+        if len(anomaly_candidates) == 0:
+            if verbose:
+                print("No suitable anomaly candidate found in generated samples. Lower bound:", lower_bound, "Upper bound:", upper_bound)
+            raise ValueError("No suitable anomaly candidate found in generated samples.")
+
+        # get the anomaly value
+        anomaly_value = anomaly_candidates[0]
+
+        # convert to numpy array for in-place updates
+        sim_np = sim_data[["data_ext"]].to_numpy()
+        n_length = sim_np.shape[0]
+
+        # update the maximum value in-place
+        sim_np[max_second_half_idx, 0] = anomaly_value # in-place update
+        if max_second_half_idx + 1 < n_length: # update the next value to adjust
+            # FROM ANOMALY INJECTION CODE
+            # new_max = max_val + n_std * coresp_std
+            # sim_np[max_idx + 1, 1] = sim_np[max_idx + 1, 1] - n_std * coresp_std
+            sim_np[max_second_half_idx + 1, 0] = sim_np[max_second_half_idx + 1, 0] - (anomaly_value - max_second_half)
+
+        # add new column to the dataframe
+        sim_data['data_anom'] = sim_np[:,0]
+
+        # create a max_flag_anomaly column to indicate the injected anomaly
+        sim_data['max_flag_anomaly'] = 0
+        sim_data.loc[max_second_half_idx, 'max_flag_anomaly'] = 1
+
+        # return the data
         return sim_data, reference_evs
