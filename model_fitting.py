@@ -323,7 +323,7 @@ class ModelFitting:
         # calculate MWI score: sum of max(0, |actual - closest bound|)
         
         # (1) MWI Score
-        out_of_bounds = ~forecast_df['within_CI']
+        out_of_bounds = ~forecast_df['within_CI'].astype(bool)
         mwi_score = avg_width + (1/len(forecast_df)) * (2/(1-level)) * np.sum(
             np.maximum(
             0,

@@ -301,13 +301,13 @@ class DtACI(ModelFitting):
         
         return beta_seq
     
-    def get_dtaci_forecast_df(self, score_type: str, *, alpha = 0.05, lookback=300, start_up=100, burn_ind = 100, ar=1, garch_p=1, garch_q=1, sigma = None, eta = None, I=100, eta_adapt=False) -> pd.DataFrame:
+    def get_dtaci_forecast_df(self, score_type: str, *, alpha = 0.05, lookback=300, start_up=100, burn_ind = 100, ar=1, garch_p=1, garch_q=1, sigma = None, eta = None, I=np.inf, eta_adapt=False) -> pd.DataFrame:
         # keep these values consistent
         gamma_grid= [0.001,0.002,0.004,0.008,0.0160,0.032,0.064,0.128]
         Keps = 2.12
         
         # (1) Compute the scores, means, and variances
-        scores, means, variances = self.argarch_conformal_forecasting_compute_scores(score_type=score_type, lookback=300, start_up=start_up, ar=ar, garch_p=garch_p, garch_q=garch_q)
+        scores, means, variances = self.argarch_conformal_forecasting_compute_scores(score_type=score_type, lookback=lookback, start_up=start_up, ar=ar, garch_p=garch_p, garch_q=garch_q)
 
         # (2) Compute the betas
         betas = self.garch_conformal_forecasting_compute_betas(scores,lookback=lookback)
