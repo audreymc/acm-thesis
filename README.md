@@ -1,5 +1,2 @@
 # ACM Thesis
-This repositority contains the exploratory work for my ACM masters thesis on methods for anomaly detection in high frequency, real-time equity trade data.
-
-## Status
-This project is currently **IN PROGRESS**. 
+This repositority contains the code base and exploratory analysis for my ACM masters thesis on methods for online anomaly detection in equity prices.
