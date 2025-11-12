@@ -131,20 +131,20 @@ class ModelFitting:
     def arma_conformal_forecasting(self, alpha, gamma, pred_col = "log_highlow_diff", lookback=300, ar=1, ma=0, startUp=100, verbose=False, updateMethod="Simple", momentumBW=0.95):
         returns = self.data[pred_col].values
         T = len(returns) # total number of returns
-        startUp = max(startUp, lookback) # ensure startUp is at least as large as lookback
+        init_value = max(startUp, lookback) # initialize to ensure startUp is at least as large as lookback
     
         alphat = alpha  # initialize dynamic alpha
         
         ### initialize data storage lists
-        errSeqOC = [0] * (T - startUp)  # online conformal error sequence
-        errSeqNC = [0] * (T - startUp)  # naive conformal error sequence
-        alphaSequence = [alpha] * (T - startUp)  # track evolving alpha values
-        scores = [0] * (T - startUp)  # track conformity scores
+        errSeqOC = [0] * (T - init_value)  # online conformal error sequence
+        errSeqNC = [0] * (T - init_value)  # naive conformal error sequence
+        alphaSequence = [alpha] * (T - init_value)  # track evolving alpha values
+        scores = [0] * (T - init_value)  # track conformity scores
         pred_returns = []
         online_intervals = []
         naive_intervals = []
 
-        for t in range(startUp, T):
+        for t in range(init_value, T):
             if (verbose):
                 print(t)
             
@@ -156,13 +156,13 @@ class ModelFitting:
             pred_returns.append(retNext)
             
             ### 3. Compute conformity score: Adapted Gamma
-            scores[t - startUp] = abs((returns[t] - retNext)/retNext) # take the absolute value of the normalized residual
+            scores[t - init_value] = abs((returns[t] - retNext)/retNext) # take the absolute value of the normalized residual
             
             ### 4. Collect recent past scores for quantile estimation
-            recentScores = scores[max(t - startUp - lookback, 0):(t - startUp + 1)]
+            recentScores = scores[max(t - init_value - lookback, 0):(t - init_value + 1)]
             
             ### 5. Update error sequences
-            index = t - startUp
+            index = t - init_value
             
             # Online Conformal: using current dynamic alpha
             alphat_quantile = np.quantile(recentScores, 1 - max(alphat, 0))
@@ -175,16 +175,16 @@ class ModelFitting:
             naive_intervals.append([retNext - np.abs(retNext) * alpha_quantile, retNext + np.abs(retNext) * alpha_quantile])
                     
             ### 6. Update alphat based on past errors
-            alphaSequence[t - startUp] = alphat
+            alphaSequence[t - init_value] = alphat
             
             if updateMethod == "Simple":
                 # Simple online update rule
-                alphat = alphat + gamma * (alpha - errSeqOC[t - startUp])          
+                alphat = alphat + gamma * (alpha - errSeqOC[t - init_value])          
             elif updateMethod == "Momentum":
                 # Momentum-based update rule
-                w = np.power(momentumBW, np.arange(0, t - startUp + 1))[::-1]
+                w = np.power(momentumBW, np.arange(0, t - init_value + 1))[::-1]
                 w = w / sum(w)
-                alphat = alphat + gamma * (alpha - sum(errSeqOC[0:(t - startUp)] * w))
+                alphat = alphat + gamma * (alpha - sum(errSeqOC[0:(t - init_value + 1)] * w))
             
             ### Optional: Print progress every 100 steps
             if t % 100 == 0:
@@ -193,20 +193,20 @@ class ModelFitting:
         # create result dataframes
         # online intervals
         online_df = pd.DataFrame(online_intervals, columns=['lower_bound', 'upper_bound'])
-        online_df['actual'] = returns[startUp:]
+        online_df['actual'] = returns[init_value:]
         online_df['forecast'] = pred_returns
         online_df['within_CI'] = (online_df['actual'] >= online_df['lower_bound']) & (online_df['actual'] <= online_df['upper_bound'])
         online_df['alpha'] = alphaSequence
 
         # naive intervals
         naive_df = pd.DataFrame(naive_intervals, columns=['lower_bound', 'upper_bound'])
-        naive_df['actual'] = returns[startUp:]
+        naive_df['actual'] = returns[init_value:]
         naive_df['forecast'] = pred_returns
         naive_df['within_CI'] = (naive_df['actual'] >= naive_df['lower_bound']) & (naive_df['actual'] <= naive_df['upper_bound'])
         naive_df['alpha'] = alpha
     
         # Return the results
-        return (online_df, naive_df)
+        return (online_df.iloc[startUp:].reset_index(drop=True), naive_df[startUp:].reset_index(drop=True))
 
     # NOTE: Need extra observations to "burn in" the model
     def argarch_conformal_forecasting(self, alpha, gamma, 
@@ -216,21 +216,21 @@ class ModelFitting:
                                          startUp=100, verbose=False, updateMethod="Simple", momentumBW=0.95):
         returns = self.data[pred_col].values
         T = len(returns) # total number of returns
-        startUp = max(startUp, lookback) # ensure startUp is at least as large as lookback
+        init_value = max(startUp, lookback) # ensure startUp is at least as large as lookback
     
         alphat = alpha  # initialize dynamic alpha
         
         ### initialize data storage lists
-        errSeqOC = [0] * (T - startUp)  # online conformal error sequence
-        errSeqNC = [0] * (T - startUp)  # naive conformal error sequence
-        alphaSequence = [alpha] * (T - startUp)  # track evolving alpha values
-        scores = [0] * (T - startUp)  # track conformity scores
+        errSeqOC = [0] * (T - init_value)  # online conformal error sequence
+        errSeqNC = [0] * (T - init_value)  # naive conformal error sequence
+        alphaSequence = [alpha] * (T - init_value)  # track evolving alpha values
+        scores = [0] * (T - init_value)  # track conformity scores
         pred_returns = []
         pred_std = []
         online_intervals = []
         naive_intervals = []
 
-        for t in range(startUp, T):
+        for t in range(init_value, T):
             if (verbose):
                 print(t)
 
@@ -247,13 +247,13 @@ class ModelFitting:
             pred_std.append(forecast_std)
             
             ### 3. Compute conformity score: Residual Normalized Score
-            scores[t - startUp] = abs((returns[t] - forecast_mean)/forecast_std)
+            scores[t - init_value] = abs((returns[t] - forecast_mean)/forecast_std)
             
             ### 4. Collect recent past scores for quantile estimation
-            recentScores = scores[max(t - startUp - lookback, 0):(t - startUp + 1)]
+            recentScores = scores[max(t - init_value - lookback, 0):(t - init_value + 1)]
             
             ### 5. Update error sequences
-            index = t - startUp
+            index = t - init_value
             
             # Online Conformal: using current dynamic alpha
             alphat_quantile = np.quantile(recentScores, 1 - max(alphat, 0))
@@ -268,16 +268,16 @@ class ModelFitting:
             naive_intervals.append([forecast_mean - forecast_std * alpha_quantile, forecast_mean + forecast_std * alpha_quantile])
                     
             ### 6. Update alphat based on past errors
-            alphaSequence[t - startUp] = alphat
+            alphaSequence[t - init_value] = alphat
             
             if updateMethod == "Simple":
                 # Simple online update rule
-                alphat = alphat + gamma * (alpha - errSeqOC[t - startUp])          
+                alphat = alphat + gamma * (alpha - errSeqOC[t - init_value])          
             elif updateMethod == "Momentum":
                 # Momentum-based update rule
-                w = np.power(momentumBW, np.arange(0, t - startUp + 1))[::-1]
+                w = np.power(momentumBW, np.arange(0, t - init_value + 1))[::-1]
                 w = w / sum(w)
-                alphat = alphat + gamma * (alpha - sum(errSeqOC[0:(t - startUp)] * w))
+                alphat = alphat + gamma * (alpha - sum(errSeqOC[0:(t - init_value + 1)] * w))
             
             ### Optional: Print progress every 100 steps
             if t % 100 == 0:
@@ -286,7 +286,7 @@ class ModelFitting:
         # create result dataframes
         # online intervals
         online_df = pd.DataFrame(online_intervals, columns=['lower_bound', 'upper_bound'])
-        online_df['actual'] = returns[startUp:]
+        online_df['actual'] = returns[init_value:]
         online_df['forecast'] = pred_returns
         online_df['forecast_std'] = pred_std
         online_df['within_CI'] = (online_df['actual'] >= online_df['lower_bound']) & (online_df['actual'] <= online_df['upper_bound'])
@@ -294,18 +294,18 @@ class ModelFitting:
 
         # naive intervals
         naive_df = pd.DataFrame(naive_intervals, columns=['lower_bound', 'upper_bound'])
-        naive_df['actual'] = returns[startUp:]
+        naive_df['actual'] = returns[init_value:]
         naive_df['forecast'] = pred_returns
         naive_df['forecast_std'] = pred_std
         naive_df['within_CI'] = (naive_df['actual'] >= naive_df['lower_bound']) & (naive_df['actual'] <= naive_df['upper_bound'])
         naive_df['alpha'] = alpha
     
         # Return the results
-        return (online_df, naive_df)      
+        return (online_df[startUp:], naive_df[startUp:])      
 
     
     # function to get coverage statistics
-    def get_coverage_stats(self, forecast_df, level = 0.95):
+    def get_coverage_stats(self, forecast_df, actual_range = None, level = 0.95):
         # ensure we don't modify the original DataFrame
         forecast_df = forecast_df.copy()
 
@@ -314,17 +314,22 @@ class ModelFitting:
 
         # calculate average, median, max, and min width of the confidence interval
         forecast_df['width'] = forecast_df['upper_bound'] - forecast_df['lower_bound']
-        avg_width = forecast_df['width'].mean()
-        median_width = forecast_df['width'].median()
-        max_width = forecast_df['width'].max()
-        min_width = forecast_df['width'].min()
+
+        # NOTE: specialize actual range in before/after analysis
+        if actual_range is None:
+            actual_range = forecast_df['actual'].max() - forecast_df['actual'].min()
+            
+        avg_width = (1/actual_range) * forecast_df['width'].mean()
+        median_width = (1/actual_range) * forecast_df['width'].median()
+        max_width = (1/actual_range) * forecast_df['width'].max()
+        min_width = (1/actual_range) * forecast_df['width'].min()
 
         # calculate the MWI score
         # calculate MWI score: sum of max(0, |actual - closest bound|)
         
         # (1) MWI Score
         out_of_bounds = ~forecast_df['within_CI'].astype(bool)
-        mwi_score = avg_width + (1/len(forecast_df)) * (2/(1-level)) * np.sum(
+        mwi_score = avg_width + (2/ ( (1-level) * actual_range) ) * np.sum(
             np.maximum(
             0,
             np.abs(forecast_df.loc[out_of_bounds, 'actual'] -
@@ -339,12 +344,10 @@ class ModelFitting:
         )
 
         # (2) CWC score
-        nmpiw_score = avg_width / (forecast_df['actual'].max() - forecast_df['actual'].min())
-        mu = level
         picp_score = (1/len(forecast_df)) * np.sum(forecast_df['within_CI'].astype(int))
-        gamma = 0 if picp_score >= mu else 1
-        eta = 1 # set eta to 1 for simplicity
-        cwc_score = nmpiw_score * (1 + (gamma * picp_score * np.exp(-eta * (picp_score - mu))))
+        gamma = 0 if picp_score >= level else 1
+        eta = 50 # eta = 50 per CWC paper
+        cwc_score = avg_width * (1 + gamma * np.exp(-eta * (picp_score - level)))
 
         # calculate mean absolute error
         mae = np.abs(forecast_df['actual'] - forecast_df['forecast']).mean()
@@ -360,6 +363,7 @@ class ModelFitting:
                 'mwi_score': mwi_score,
                 'cwc_score': cwc_score,
                 'min_width': min_width,
+                'R': actual_range,
                 'mae': mae,
                 'rmse': rmse}
     

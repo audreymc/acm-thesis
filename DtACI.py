@@ -66,12 +66,16 @@ class DtACI(ModelFitting):
         # Randomly select current expert initially
         cur_expert = np.random.choice(k)
 
-        # initialize eta if adapting
-        if sigma is None:
-            sigma = 1/(2.0 * I)
-        
-        if eta is None:
-            eta = np.sqrt(3.0/I) * np.sqrt( (np.log(2*k*I) + 1) / ((1-alpha)**2 * alpha**2) )  # set an initial eta value
+        # initialize eta and signma if needed
+        if I != np.inf:
+            if sigma is None:
+                sigma = 1/(2.0 * I)
+            
+            if eta is None: # static eta value 
+                eta = np.sqrt(3.0/I) * np.sqrt( (np.log(2*k*I) + 1) / ((1-alpha)**2 * alpha**2) )  # set an initial eta value
+        else:
+            eta = 2.72     # if I is infinite, set eta to the default value of 2.72
+            sigma = 1/1000 # if I is infinite, set sigma to a small value
 
         for t in range(T):
             # adapt eta if required and enough history available
@@ -116,7 +120,7 @@ class DtACI(ModelFitting):
                 cur_expert = np.random.choice(k, p=expert_probs)
                 expert_ws = expert_next_ws
             else:
-                # If eta not adapted (infinite), choose expert with minimum cumulative loss
+                # If eta is infinite, choose expert with minimum cumulative loss
                 expert_cumulative_losses += expert_losses
                 cur_expert = np.argmin(expert_cumulative_losses)
 

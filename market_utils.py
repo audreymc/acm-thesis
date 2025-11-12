@@ -11,7 +11,7 @@ import datetime
 from tqdm import tqdm 
 
 class MarketUtilities():
-    def __init__(self, wrds_username, wrds_db = "auto", sqlite_conn = "auto", path_prefix="/Users/audreymcmillion/Documents/acm-thesis"):
+    def __init__(self, wrds_username, wrds_db = "auto", sqlite_conn = "auto", path_prefix="/Users/audreymcmillion/Documents/acm-thesis", mcalendar_value = None):
         if wrds_db is not None and wrds_db != "auto":
             self.wrds_db = wrds_db
         elif wrds_db == "auto":
@@ -27,8 +27,11 @@ class MarketUtilities():
             self.sqlite_conn = sqlite3.connect(f'{path_prefix}/databases/halt_data.db')
         else:
             self.sqlite_conn = None
-            
-        self.nyse = mcal.get_calendar("NYSE")
+        
+        if mcalendar_value is None:
+            self.nyse = mcal.get_calendar("NYSE")
+        else:
+            self.nyse = mcalendar_value
 
         with open(f"{path_prefix}/sql_lib/daily_price_details.sql", "r") as file:
             self.price_details_query = file.read()
