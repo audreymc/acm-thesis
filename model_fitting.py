@@ -112,6 +112,9 @@ class ModelFitting:
     # This method is using a simple ARMA base model for forecasting the mean return but does not model the volatility.
     # It produces online conformal prediction intervals based on the ARMA model's predictions and a gamma score.
     # The method allows for dynamic adjustment of the alpha level based on past errors.
+    # NOTE: This code is translated from Gibbes & Candes paper with some help from a GPT model, 
+    # which was manually reviewed for correctness. The original paper is available at 
+    # https://proceedings.neurips.cc/paper/2021/hash/0d441de75945e5acbc865406fc9a2559-Abstract.html.
     # Parameters:
     # - alpha: initial significance level for the prediction intervals
     # - gamma: learning rate for updating the alpha level
@@ -318,7 +321,7 @@ class ModelFitting:
         # NOTE: specialize actual range in before/after analysis
         if actual_range is None:
             actual_range = forecast_df['actual'].max() - forecast_df['actual'].min()
-            
+
         avg_width = (1/actual_range) * forecast_df['width'].mean()
         median_width = (1/actual_range) * forecast_df['width'].median()
         max_width = (1/actual_range) * forecast_df['width'].max()
